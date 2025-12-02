@@ -2,33 +2,34 @@
 #include "core/Logger.hpp"
 
 namespace isic {
-
     namespace {
-        constexpr auto* FEEDBACK_TAG = "Feedback";
-        constexpr std::size_t MAX_QUEUE_SIZE = 16;
+        constexpr auto *FEEDBACK_TAG{"Feedback"};
+        constexpr std::size_t MAX_QUEUE_SIZE{16};
     }
 
-    UserFeedbackService::UserFeedbackService(EventBus& bus) : m_bus(bus) {
+    UserFeedbackService::UserFeedbackService(EventBus &bus) : m_bus(bus) {
         m_subscriptionId = m_bus.subscribe(this,
-            EventFilter::only(EventType::ConfigUpdated)
-                .include(EventType::FeedbackRequested)
-                .include(EventType::CardScanned)
-                .include(EventType::CardReadError)
-                .include(EventType::MqttConnected)
-                .include(EventType::MqttDisconnected)
-                .include(EventType::OtaStateChanged));
+        EventFilter::only(EventType::ConfigUpdated)
+                    .include(EventType::FeedbackRequested)
+                    .include(EventType::CardScanned)
+                    .include(EventType::CardReadError)
+                    .include(EventType::MqttConnected)
+                    .include(EventType::MqttDisconnected)
+                    .include(EventType::OtaStateChanged)
+        );
     }
 
     UserFeedbackService::~UserFeedbackService() {
         stop();
         m_bus.unsubscribe(m_subscriptionId);
+
         if (m_feedbackQueue) {
             vQueueDelete(m_feedbackQueue);
             m_feedbackQueue = nullptr;
         }
     }
 
-    Status UserFeedbackService::begin(const AppConfig& cfg) {
+    Status UserFeedbackService::begin(const AppConfig &cfg) {
         m_cfg = &cfg.feedback;
         m_enabled.store(m_cfg->enabled);
 
@@ -52,11 +53,11 @@ namespace isic {
         if (m_cfg->buzzerEnabled) {
             // Setup LEDC for buzzer PWM (ESP32 Arduino 3.x API)
             ledcAttach(m_buzzerPin, m_cfg->beepFrequencyHz, BUZZER_LEDC_RESOLUTION);
-            ledcWrite(m_buzzerPin, 0);  // Start silent
+            ledcWrite(m_buzzerPin, 0); // Start silent
         }
 
         // Create feedback queue
-        const auto queueSize = m_cfg->queueSize > 0 ? m_cfg->queueSize : MAX_QUEUE_SIZE;
+        const auto queueSize{m_cfg->queueSize > 0 ? m_cfg->queueSize : MAX_QUEUE_SIZE};
         m_feedbackQueue = xQueueCreate(queueSize, sizeof(FeedbackPattern));
         if (!m_feedbackQueue) {
             LOG_ERROR(FEEDBACK_TAG, "Failed to create feedback queue");
@@ -72,13 +73,10 @@ namespace isic {
             this,
             m_cfg->taskPriority,
             &m_taskHandle,
-            1  // Core 1
+            1 // Core 1
         );
 
-        LOG_INFO(FEEDBACK_TAG, "Feedback service started: LED=%s, Buzzer=%s",
-                 m_cfg->ledEnabled ? "on" : "off",
-                 m_cfg->buzzerEnabled ? "on" : "off");
-
+        LOG_INFO(FEEDBACK_TAG, "Feedback service started: LED=%s, Buzzer=%s", m_cfg->ledEnabled ? "on" : "off", m_cfg->buzzerEnabled ? "on" : "off");
         return Status::OK();
     }
 
@@ -104,7 +102,7 @@ namespace isic {
     void UserFeedbackService::signalSuccess() {
         if (!m_enabled.load() || !m_cfg) return;
 
-        FeedbackPattern pattern = PATTERN_SUCCESS;
+        FeedbackPattern pattern{PATTERN_SUCCESS};
         pattern.ledOnMs = m_cfg->successBlinkMs;
         pattern.beepMs = m_cfg->successBeepMs;
         pattern.beepFrequencyHz = m_cfg->beepFrequencyHz;
@@ -115,7 +113,7 @@ namespace isic {
     void UserFeedbackService::signalError() {
         if (!m_enabled.load() || !m_cfg) return;
 
-        FeedbackPattern pattern = PATTERN_ERROR;
+        FeedbackPattern pattern{PATTERN_ERROR};
         pattern.ledOnMs = m_cfg->errorBlinkMs;
         pattern.repeatCount = m_cfg->errorBeepCount;
         pattern.beepFrequencyHz = m_cfg->beepFrequencyHz;
@@ -124,59 +122,77 @@ namespace isic {
     }
 
     void UserFeedbackService::signalProcessing() {
-        if (!m_enabled.load()) return;
+        if (!m_enabled.load()) {
+            return;
+        }
         queuePattern(PATTERN_PROCESSING);
     }
 
     void UserFeedbackService::signalConnected() {
-        if (!m_enabled.load()) return;
+        if (!m_enabled.load()) {
+            return;
+        }
         queuePattern(PATTERN_CONNECTED);
     }
 
     void UserFeedbackService::signalDisconnected() {
-        if (!m_enabled.load()) return;
+        if (!m_enabled.load()) {
+            return;
+        }
         queuePattern(PATTERN_DISCONNECTED);
     }
 
     void UserFeedbackService::signalOtaStarted() {
-        if (!m_enabled.load()) return;
+        if (!m_enabled.load()) {
+            return;
+        }
         queuePattern(PATTERN_OTA_START);
     }
 
     void UserFeedbackService::signalOtaComplete() {
-        if (!m_enabled.load()) return;
+        if (!m_enabled.load()) {
+            return;
+        }
         queuePattern(PATTERN_OTA_COMPLETE);
     }
 
-    void UserFeedbackService::signalCustom(const FeedbackPattern& pattern) {
-        if (!m_enabled.load()) return;
+    void UserFeedbackService::signalCustom(const FeedbackPattern &pattern) {
+        if (!m_enabled.load()) {
+            return;
+        }
         queuePattern(pattern);
     }
 
-    void UserFeedbackService::setSuccessLed(bool on) {
-        if (!m_cfg || !m_cfg->ledEnabled) return;
+    void UserFeedbackService::setSuccessLed(const bool on) {
+        if (!m_cfg || !m_cfg->ledEnabled) {
+            return;
+        }
 
-        const auto state = m_ledActiveHigh ? (on ? HIGH : LOW) : (on ? LOW : HIGH);
+        const auto state{m_ledActiveHigh ? (on ? HIGH : LOW) : (on ? LOW : HIGH)};
         digitalWrite(m_successLedPin, state);
     }
 
-    void UserFeedbackService::setErrorLed(bool on) {
-        if (!m_cfg || !m_cfg->ledEnabled) return;
+    void UserFeedbackService::setErrorLed(const bool on) {
+        if (!m_cfg || !m_cfg->ledEnabled) {
+            return;
+        }
 
-        const auto pin = (m_errorLedPin != m_successLedPin) ? m_errorLedPin : m_successLedPin;
-        const auto state = m_ledActiveHigh ? (on ? HIGH : LOW) : (on ? LOW : HIGH);
+        const auto pin{(m_errorLedPin != m_successLedPin) ? m_errorLedPin : m_successLedPin};
+        const auto state{m_ledActiveHigh ? (on ? HIGH : LOW) : (on ? LOW : HIGH)};
         digitalWrite(pin, state);
     }
 
-    void UserFeedbackService::playTone(std::uint16_t frequencyHz, std::uint16_t durationMs) {
-        if (!m_cfg || !m_cfg->buzzerEnabled) return;
+    void UserFeedbackService::playTone(const std::uint16_t frequencyHz, const std::uint16_t durationMs) {
+        if (!m_cfg || !m_cfg->buzzerEnabled) {
+            return;
+        }
 
         ledcWriteTone(m_buzzerPin, frequencyHz);
         vTaskDelay(pdMS_TO_TICKS(durationMs));
         ledcWrite(m_buzzerPin, 0);
     }
 
-    void UserFeedbackService::updateConfig(const FeedbackConfig& cfg) {
+    void UserFeedbackService::updateConfig(const FeedbackConfig &cfg) {
         m_cfg = &cfg;
         m_enabled.store(cfg.enabled);
 
@@ -206,53 +222,59 @@ namespace isic {
         m_enabled.store(enabled);
     }
 
-    void UserFeedbackService::onEvent(const Event& event) {
+    void UserFeedbackService::onEvent(const Event &event) {
         if (!m_enabled.load()) return;
 
         switch (event.type) {
-            case EventType::ConfigUpdated:
-                if (const auto* ce = std::get_if<ConfigUpdatedEvent>(&event.payload)) {
+            case EventType::ConfigUpdated: {
+                if (const auto *ce = std::get_if<ConfigUpdatedEvent>(&event.payload)) {
                     if (ce->config) {
                         updateConfig(ce->config->feedback);
                     }
                 }
                 break;
-
-            case EventType::FeedbackRequested:
-                if (const auto* fr = std::get_if<FeedbackRequestEvent>(&event.payload)) {
+            }
+            case EventType::FeedbackRequested: {
+                if (const auto *fr = std::get_if<FeedbackRequestEvent>(&event.payload)) {
                     switch (fr->signal) {
-                        case FeedbackSignal::Success:      signalSuccess(); break;
-                        case FeedbackSignal::Error:        signalError(); break;
-                        case FeedbackSignal::Processing:   signalProcessing(); break;
-                        case FeedbackSignal::Connected:    signalConnected(); break;
-                        case FeedbackSignal::Disconnected: signalDisconnected(); break;
-                        case FeedbackSignal::OtaStarted:   signalOtaStarted(); break;
-                        case FeedbackSignal::OtaComplete:  signalOtaComplete(); break;
+                        case FeedbackSignal::Success: signalSuccess();
+                            break;
+                        case FeedbackSignal::Error: signalError();
+                            break;
+                        case FeedbackSignal::Processing: signalProcessing();
+                            break;
+                        case FeedbackSignal::Connected: signalConnected();
+                            break;
+                        case FeedbackSignal::Disconnected: signalDisconnected();
+                            break;
+                        case FeedbackSignal::OtaStarted: signalOtaStarted();
+                            break;
+                        case FeedbackSignal::OtaComplete: signalOtaComplete();
+                            break;
                         default: break;
                     }
                 }
                 break;
-
-            case EventType::CardScanned:
+            }
+            case EventType::CardScanned: {
                 // Card scanned successfully - feedback handled by AttendanceModule
                 break;
-
-            case EventType::CardReadError:
+            }
+            case EventType::CardReadError: {
                 signalError();
                 break;
-
-            case EventType::MqttConnected:
+            }
+            case EventType::MqttConnected: {
                 signalConnected();
                 break;
-
-            case EventType::MqttDisconnected:
+            }
+            case EventType::MqttDisconnected: {
                 signalDisconnected();
                 break;
-
-            case EventType::OtaStateChanged:
-                if (const auto* ota = std::get_if<OtaStateChangedEvent>(&event.payload)) {
-                    const auto newState = static_cast<OtaState>(ota->newState);
-                    if (newState == OtaState::Downloading) {
+            }
+            case EventType::OtaStateChanged: {
+                if (const auto *ota = std::get_if<OtaStateChangedEvent>(&event.payload)) {
+                    if ( const auto newState = static_cast<OtaState>(ota->newState); newState == OtaState::Downloading) {
                         signalOtaStarted();
                     } else if (newState == OtaState::Completed) {
                         signalOtaComplete();
@@ -261,14 +283,17 @@ namespace isic {
                     }
                 }
                 break;
-
-            default:
+            }
+            default: {
                 break;
+            }
         }
     }
 
-    bool UserFeedbackService::queuePattern(const FeedbackPattern& pattern) {
-        if (!m_feedbackQueue) return false;
+    bool UserFeedbackService::queuePattern(const FeedbackPattern &pattern) {
+        if (!m_feedbackQueue) {
+            return false;
+        }
 
         // Non-blocking enqueue
         if (xQueueSend(m_feedbackQueue, &pattern, 0) != pdTRUE) {
@@ -279,8 +304,8 @@ namespace isic {
         return true;
     }
 
-    void UserFeedbackService::feedbackTaskThunk(void* arg) {
-        static_cast<UserFeedbackService*>(arg)->feedbackTask();
+    void UserFeedbackService::feedbackTaskThunk(void *arg) {
+        static_cast<UserFeedbackService *>(arg)->feedbackTask();
     }
 
     void UserFeedbackService::feedbackTask() {
@@ -298,7 +323,7 @@ namespace isic {
         vTaskDelete(nullptr);
     }
 
-    void UserFeedbackService::executePattern(const FeedbackPattern& pattern) {
+    void UserFeedbackService::executePattern(const FeedbackPattern &pattern) {
         if (!m_cfg) return;
 
         for (std::uint8_t i = 0; i < pattern.repeatCount; ++i) {
@@ -320,8 +345,7 @@ namespace isic {
         }
     }
 
-    void UserFeedbackService::blinkLed(std::uint8_t pin, bool activeHigh,
-                                        std::uint16_t onMs, std::uint16_t offMs) {
+    void UserFeedbackService::blinkLed(const std::uint8_t pin, const bool activeHigh, const std::uint16_t onMs, const std::uint16_t offMs) {
         // Turn on
         digitalWrite(pin, activeHigh ? HIGH : LOW);
         vTaskDelay(pdMS_TO_TICKS(onMs));
@@ -333,11 +357,9 @@ namespace isic {
         }
     }
 
-    void UserFeedbackService::beep(std::uint16_t frequencyHz, std::uint16_t durationMs) {
+    void UserFeedbackService::beep(const std::uint16_t frequencyHz, const std::uint16_t durationMs) {
         ledcWriteTone(m_buzzerPin, frequencyHz);
         vTaskDelay(pdMS_TO_TICKS(durationMs));
         ledcWrite(m_buzzerPin, 0);
     }
-
-}  // namespace isic
-
+} // namespace isic

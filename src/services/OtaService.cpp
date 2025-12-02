@@ -34,37 +34,35 @@
 #include <esp_app_desc.h>
 
 namespace isic {
-
     namespace {
-        constexpr auto* OTA_TAG = "OtaService";
+        constexpr auto *OTA_TAG{"OtaService"};
 
         // Buffer and timing constants
-        constexpr std::uint32_t DOWNLOAD_BUFFER_SIZE = 4096;
-        constexpr std::uint32_t PROGRESS_REPORT_INTERVAL_MS = 1000;
-        constexpr std::uint32_t CONNECT_TIMEOUT_MS = 15000;
-        constexpr std::uint32_t HTTP_TIMEOUT_MS = 30000;
+        constexpr std::uint32_t DOWNLOAD_BUFFER_SIZE{4096};
+        constexpr std::uint32_t PROGRESS_REPORT_INTERVAL_MS{1000};
+        constexpr std::uint32_t CONNECT_TIMEOUT_MS{15000};
+        constexpr std::uint32_t HTTP_TIMEOUT_MS{30000};
 
         // Firmware validation constants
-        constexpr std::size_t MIN_FIRMWARE_SIZE = 32768;        // 32KB minimum
-        constexpr std::size_t MAX_FIRMWARE_SIZE = 1280 * 1024;  // 1.25MB (partition size)
+        constexpr std::size_t MIN_FIRMWARE_SIZE{32768}; // 32KB minimum
+        constexpr std::size_t MAX_FIRMWARE_SIZE{1280 * 1024}; // 1.25MB (partition size)
 
         // ESP-IDF magic byte for app images
-        constexpr std::uint8_t ESP_IMAGE_MAGIC = 0xE9;
+        constexpr std::uint8_t ESP_IMAGE_MAGIC{0xE9};
 
         // SHA256 digest size
-        constexpr std::size_t SHA256_DIGEST_SIZE = 32;
+        constexpr std::size_t SHA256_DIGEST_SIZE{32};
     }
 
-    // ==================== Constructor/Destructor ====================
-
-    OtaService::OtaService(EventBus& bus) : m_bus(bus) {
+    OtaService::OtaService(EventBus &bus) : m_bus(bus) {
         m_metricsMutex = xSemaphoreCreateMutex();
         m_triggerSemaphore = xSemaphoreCreateBinary();
 
         // Subscribe to relevant events
         m_subscriptionId = m_bus.subscribe(this,
-            EventFilter::only(EventType::ConfigUpdated)
-                .include(EventType::OtaRequested));
+        EventFilter::only(EventType::ConfigUpdated)
+                        .include(EventType::OtaRequested)
+        );
     }
 
     OtaService::~OtaService() {
@@ -81,21 +79,18 @@ namespace isic {
         }
     }
 
-    // ==================== Lifecycle ====================
-
-    Status OtaService::begin(const AppConfig& cfg, PowerService& powerService) {
+    Status OtaService::begin(const AppConfig &cfg, PowerService &powerService) {
         m_cfg = &cfg.ota;
         m_appCfg = &cfg;
         m_powerService = &powerService;
         m_enabled.store(m_cfg->enabled);
 
         // Log partition info
-        const auto* running = getRunningPartitionPtr();
-        const auto* next = getNextUpdatePartitionPtr();
+        const auto *running{getRunningPartitionPtr()};
+        const auto *next{getNextUpdatePartitionPtr()};
 
         if (running) {
-            LOG_INFO(OTA_TAG, "Running partition: %s @ 0x%08X",
-                     running->label, running->address);
+            LOG_INFO(OTA_TAG, "Running partition: %s @ 0x%08X", running->label, unsigned{running->address});
 
             // Update metrics with partition info
             if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -108,8 +103,7 @@ namespace isic {
         }
 
         if (next) {
-            LOG_INFO(OTA_TAG, "Next update partition: %s @ 0x%08X (size: %u)",
-                     next->label, next->address, next->size);
+            LOG_INFO(OTA_TAG, "Next update partition: %s @ 0x%08X (size: %u)", next->label, unsigned{next->address}, unsigned{next->size});
         } else {
             LOG_WARNING(OTA_TAG, "No update partition available!");
         }
@@ -124,14 +118,14 @@ namespace isic {
 
         // Start OTA task
         m_running.store(true);
-        BaseType_t result = xTaskCreatePinnedToCore(
+        const BaseType_t result = xTaskCreatePinnedToCore(
             &OtaService::otaTaskThunk,
             "ota_service",
             m_cfg->taskStackSize,
             this,
             m_cfg->taskPriority,
             &m_taskHandle,
-            1  // Core 1
+            1 // Core 1
         );
 
         if (result != pdPASS) {
@@ -141,8 +135,7 @@ namespace isic {
 
         LOG_INFO(OTA_TAG, "OtaService started:");
         LOG_INFO(OTA_TAG, "  Enabled: %s", m_cfg->enabled ? "yes" : "no");
-        LOG_INFO(OTA_TAG, "  Auto-check: %s (interval: %ums)",
-                 m_cfg->autoCheck ? "yes" : "no", m_cfg->checkIntervalMs);
+        LOG_INFO(OTA_TAG, "  Auto-check: %s (interval: %ums)", m_cfg->autoCheck ? "yes" : "no", unsigned{m_cfg->checkIntervalMs});
         LOG_INFO(OTA_TAG, "  Auto-update: %s", m_cfg->autoUpdate ? "yes" : "no");
         LOG_INFO(OTA_TAG, "  Require HTTPS: %s", m_cfg->requireHttps ? "yes" : "no");
         LOG_INFO(OTA_TAG, "  Current version: %s", m_cfg->currentVersion.c_str());
@@ -177,45 +170,41 @@ namespace isic {
         LOG_INFO(OTA_TAG, "OtaService stopped");
     }
 
-    // ==================== OTA Control ====================
-
-    Status OtaService::executeCommand(const OtaCommand& cmd) {
+    Status OtaService::executeCommand(const OtaCommand &cmd) {
         switch (cmd.action) {
-            case OtaAction::Update:
+            case OtaAction::Update: {
                 return triggerOtaWithChecksum(cmd.url, cmd.version, cmd.sha256);
-
-            case OtaAction::Rollback:
+            }
+            case OtaAction::Rollback: {
                 return rollback();
-
-            case OtaAction::Check:
+            }
+            case OtaAction::Check: {
                 checkForUpdates();
                 return Status::OK();
-
-            case OtaAction::Cancel:
+            }
+            case OtaAction::Cancel: {
                 cancelOta();
                 return Status::OK();
-
-            case OtaAction::MarkValid:
+            }
+            case OtaAction::MarkValid: {
                 return markPartitionValid();
-
-            case OtaAction::GetStatus:
+            }
+            case OtaAction::GetStatus: {
                 publishStatusToMqtt();
                 return Status::OK();
-
-            default:
+            }
+            default: {
                 return Status::Error(ErrorCode::InvalidArgument, "Unknown action");
+            }
         }
     }
 
-    Status OtaService::triggerOta(const std::string& url,
-                                   const std::string& version,
-                                   bool force) {
+    Status OtaService::triggerOta(const std::string &url, const std::string &version, const bool force) {
+        (void) force; // TODO: implement force update logic, like stop all services, ignore version checks, etc.
         return triggerOtaWithChecksum(url, version, "");
     }
 
-    Status OtaService::triggerOtaWithChecksum(const std::string& url,
-                                               const std::string& version,
-                                               const std::string& sha256) {
+    Status OtaService::triggerOtaWithChecksum(const std::string &url, const std::string &version, const std::string &sha256) {
         // Validate preconditions
         if (!m_enabled.load()) {
             LOG_WARNING(OTA_TAG, "OTA disabled");
@@ -244,8 +233,7 @@ namespace isic {
 
         // Check version
         if (!m_forceUpdate && !version.empty() && !isNewerVersion(version)) {
-            LOG_INFO(OTA_TAG, "Version %s is not newer than current %s",
-                     version.c_str(), m_cfg->currentVersion.c_str());
+            LOG_INFO(OTA_TAG, "Version %s is not newer than current %s", version.c_str(), m_cfg->currentVersion.c_str());
             reportError(OtaError::SameVersion, "Same or older version");
             return Status::Error(ErrorCode::AlreadyExists, "Same or older version");
         }
@@ -270,7 +258,6 @@ namespace isic {
 
         // Signal the OTA task to start
         xSemaphoreGive(m_triggerSemaphore);
-
         return Status::OK();
     }
 
@@ -295,12 +282,12 @@ namespace isic {
                 .type = EventType::OtaVersionInfo,
                 .payload = OtaVersionInfoEvent{
                     .currentVersion = m_cfg->currentVersion,
-                    .availableVersion = "",  // Would be filled by server query
+                    .availableVersion = "", // Would be filled by server query
                     .updateAvailable = false
                 },
                 .timestampMs = static_cast<std::uint64_t>(millis())
             };
-            (void)m_bus.publish(evt);
+            (void) m_bus.publish(evt); // TODO: handle publish failure?
         }
 
         if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -330,7 +317,7 @@ namespace isic {
     Status OtaService::rollback() {
         LOG_INFO(OTA_TAG, "Rollback requested");
 
-        const esp_partition_t* otherPartition = esp_ota_get_next_update_partition(nullptr);
+        const esp_partition_t *otherPartition{esp_ota_get_next_update_partition(nullptr)};
         if (!otherPartition) {
             LOG_ERROR(OTA_TAG, "No partition available for rollback");
             reportError(OtaError::RollbackFailed, "No rollback partition");
@@ -338,18 +325,15 @@ namespace isic {
         }
 
         // Check if the other partition has valid firmware
-        esp_app_desc_t appDesc;
+        esp_app_desc_t appDesc{};
         if (esp_ota_get_partition_description(otherPartition, &appDesc) != ESP_OK) {
             LOG_ERROR(OTA_TAG, "Other partition has no valid app");
             reportError(OtaError::RollbackFailed, "No valid firmware in rollback partition");
             return Status::Error(ErrorCode::NotFound, "Invalid rollback partition");
         }
 
-        LOG_INFO(OTA_TAG, "Rolling back to: %s (version: %s)",
-                 otherPartition->label, appDesc.version);
-
-        esp_err_t err = esp_ota_set_boot_partition(otherPartition);
-        if (err != ESP_OK) {
+        LOG_INFO(OTA_TAG, "Rolling back to: %s (version: %s)", otherPartition->label, appDesc.version);
+        if (const esp_err_t err = esp_ota_set_boot_partition(otherPartition); err != ESP_OK) {
             LOG_ERROR(OTA_TAG, "Failed to set boot partition: %s", esp_err_to_name(err));
             reportError(OtaError::RollbackFailed, "Failed to set boot partition");
             return Status::Error(ErrorCode::OperationFailed, "Set boot partition failed");
@@ -374,12 +358,12 @@ namespace isic {
             .timestampMs = static_cast<std::uint64_t>(millis()),
             .priority = EventPriority::E_CRITICAL
         };
-        (void)m_bus.publish(evt);
+        (void) m_bus.publish(evt); // TODO: handle publish failure?
 
         vTaskDelay(pdMS_TO_TICKS(500));
         ESP.restart();
 
-        return Status::OK();  // Won't reach here
+        return Status::OK(); // Won't reach here
     }
 
     Status OtaService::markPartitionValid() {
@@ -388,8 +372,7 @@ namespace isic {
             return Status::OK();
         }
 
-        esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
-        if (err != ESP_OK) {
+        if (const esp_err_t err = esp_ota_mark_app_valid_cancel_rollback(); err != ESP_OK) {
             LOG_ERROR(OTA_TAG, "Failed to mark partition valid: %s", esp_err_to_name(err));
             return Status::Error(ErrorCode::OperationFailed, "Mark valid failed");
         }
@@ -399,8 +382,6 @@ namespace isic {
 
         return Status::OK();
     }
-
-    // ==================== State Queries ====================
 
     OtaMetrics OtaService::getMetrics() const {
         OtaMetrics result{};
@@ -413,8 +394,7 @@ namespace isic {
 
     OtaPartitionInfo OtaService::getRunningPartition() const {
         OtaPartitionInfo info{};
-        const auto* part = getRunningPartitionPtr();
-        if (part) {
+        if (const auto *part = getRunningPartitionPtr(); part) {
             info.label = part->label;
             info.address = part->address;
             info.size = part->size;
@@ -432,8 +412,7 @@ namespace isic {
 
     OtaPartitionInfo OtaService::getNextUpdatePartition() const {
         OtaPartitionInfo info{};
-        const auto* part = getNextUpdatePartitionPtr();
-        if (part) {
+        if (const auto *part = getNextUpdatePartitionPtr(); part) {
             info.label = part->label;
             info.address = part->address;
             info.size = part->size;
@@ -450,19 +429,16 @@ namespace isic {
     }
 
     bool OtaService::isPendingValidation() const {
-        const esp_partition_t* running = esp_ota_get_running_partition();
         esp_ota_img_states_t state;
 
-        if (esp_ota_get_state_partition(running, &state) != ESP_OK) {
+        if (const esp_partition_t *running = esp_ota_get_running_partition(); esp_ota_get_state_partition(running, &state) != ESP_OK) {
             return false;
         }
 
         return state == ESP_OTA_IMG_PENDING_VERIFY;
     }
 
-    // ==================== Configuration ====================
-
-    void OtaService::updateConfig(const OtaConfig& cfg) {
+    void OtaService::updateConfig(const OtaConfig &cfg) {
         m_cfg = &cfg;
         m_enabled.store(cfg.enabled);
         LOG_INFO(OTA_TAG, "Config updated: enabled=%s", cfg.enabled ? "yes" : "no");
@@ -473,10 +449,11 @@ namespace isic {
         if (!enabled && isInProgress()) {
             cancelOta();
         }
+
         LOG_INFO(OTA_TAG, "OTA %s", enabled ? "enabled" : "disabled");
     }
 
-    void OtaService::setCaCertificate(const char* cert) {
+    void OtaService::setCaCertificate(const char *cert) {
         m_caCertificate = cert;
         LOG_INFO(OTA_TAG, "CA certificate %s", cert ? "set" : "cleared");
     }
@@ -484,8 +461,6 @@ namespace isic {
     void OtaService::setProgressCallback(ProgressCallback callback) {
         m_progressCallback = std::move(callback);
     }
-
-    // ==================== IHealthCheck Implementation ====================
 
     HealthStatus OtaService::getHealth() const {
         HealthStatus status{};
@@ -517,39 +492,33 @@ namespace isic {
         return m_state.load() != OtaState::Failed;
     }
 
-    // ==================== IEventListener Implementation ====================
-
-    void OtaService::onEvent(const Event& event) {
+    void OtaService::onEvent(const Event &event) {
         switch (event.type) {
-            case EventType::ConfigUpdated:
-                if (const auto* ce = std::get_if<ConfigUpdatedEvent>(&event.payload)) {
+            case EventType::ConfigUpdated: {
+                if (const auto *ce = std::get_if<ConfigUpdatedEvent>(&event.payload)) {
                     if (ce->config) {
                         updateConfig(ce->config->ota);
                     }
                 }
                 break;
-
-            case EventType::OtaRequested:
-                if (const auto* req = std::get_if<OtaRequestEvent>(&event.payload)) {
-                    (void)triggerOta(req->url, req->version, req->force);
+            }
+            case EventType::OtaRequested: {
+                if (const auto *req = std::get_if<OtaRequestEvent>(&event.payload)) {
+                    (void) triggerOta(req->url, req->version, req->force); // Ignore status here
                 }
                 break;
-
-            default:
+            }
+            default: {
                 break;
+            }
         }
     }
 
     // ==================== State Machine ====================
 
-    void OtaService::transitionTo(OtaState newState, const std::string& message) {
-        const auto oldState = m_state.exchange(newState);
-
-        if (oldState != newState) {
-            LOG_INFO(OTA_TAG, "State: %s -> %s%s%s",
-                     toString(oldState), toString(newState),
-                     message.empty() ? "" : " - ",
-                     message.c_str());
+    void OtaService::transitionTo(OtaState newState, const std::string &message) {
+        if ( const auto oldState = m_state.exchange(newState); oldState != newState) {
+            LOG_INFO(OTA_TAG, "State: %s -> %s%s%s", toString(oldState), toString(newState), message.empty() ? "" : " - ", message.c_str());
 
             // Publish state change event
             const Event evt{
@@ -563,14 +532,12 @@ namespace isic {
                 .timestampMs = static_cast<std::uint64_t>(millis()),
                 .priority = EventPriority::E_HIGH
             };
-            (void)m_bus.publish(evt);
+            (void) m_bus.publish(evt); // TODO: handle publish failure?
         }
     }
 
-    // ==================== OTA Task ====================
-
-    void OtaService::otaTaskThunk(void* arg) {
-        static_cast<OtaService*>(arg)->otaTask();
+    void OtaService::otaTaskThunk(void *arg) {
+        static_cast<OtaService *>(arg)->otaTask();
     }
 
     void OtaService::otaTask() {
@@ -578,23 +545,22 @@ namespace isic {
 
         while (m_running.load()) {
             // Wait for trigger or timeout for auto-check
-            const auto timeout = m_cfg && m_cfg->autoCheck
-                ? pdMS_TO_TICKS(m_cfg->checkIntervalMs)
-                : portMAX_DELAY;
+            const auto timeout{m_cfg && m_cfg->autoCheck ? pdMS_TO_TICKS(m_cfg->checkIntervalMs) : portMAX_DELAY};
 
             if (xSemaphoreTake(m_triggerSemaphore, timeout) == pdTRUE) {
                 // Manual trigger
-                if (!m_running.load()) break;
+                if (!m_running.load()) {
+                    break;
+                }
 
                 if (!m_pendingUrl.empty()) {
                     m_cancelRequested.store(false);
-                    (void)performUpdate();
+                    (void) performUpdate(); // Ignore result here
                 }
             } else {
                 // Timeout - auto-check if enabled
                 if (m_cfg && m_cfg->autoCheck && m_enabled.load()) {
-                    const auto now = millis();
-                    if (now - m_lastAutoCheckMs >= m_cfg->checkIntervalMs) {
+                    if (const auto now = millis(); now - m_lastAutoCheckMs >= m_cfg->checkIntervalMs) {
                         m_lastAutoCheckMs = now;
                         checkForUpdates();
                     }
@@ -616,10 +582,8 @@ namespace isic {
         // Check backoff period
         if (m_consecutiveFailures > 0) {
             const auto backoff = calculateBackoff();
-            const auto elapsed = millis() - m_lastFailureMs;
-            if (elapsed < backoff) {
-                LOG_INFO(OTA_TAG, "In backoff period, waiting %lu more ms",
-                         static_cast<unsigned long>(backoff - elapsed));
+            if (const auto elapsed = millis() - m_lastFailureMs; elapsed < backoff) {
+                LOG_INFO(OTA_TAG, "In backoff period, waiting %lu more ms", static_cast<unsigned long>(backoff - elapsed));
                 return false;
             }
         }
@@ -698,7 +662,7 @@ namespace isic {
         transitionTo(OtaState::Downloading, "Connecting to server...");
 
         // Setup HTTP client (HTTP only - no HTTPS support)
-        HTTPClient http;
+        HTTPClient http{};
 
         // Configure HTTP client
         http.setTimeout(m_cfg ? m_cfg->downloadTimeoutMs : HTTP_TIMEOUT_MS);
@@ -714,14 +678,13 @@ namespace isic {
 
         // Make GET request
         transitionTo(OtaState::Downloading, "Downloading firmware...");
-        const int httpCode = http.GET();
 
-        if (!validateHttpResponse(http, httpCode)) {
+        if (const int httpCode = http.GET(); !validateHttpResponse(http, httpCode)) {
             http.end();
             return false;
         }
 
-        const std::int32_t contentLength = http.getSize();
+        const auto contentLength = http.getSize();
 
         // Get next OTA partition and prepare for writing
         if (!preparePartition(contentLength)) {
@@ -730,7 +693,7 @@ namespace isic {
         }
 
         // Get stream for chunked download
-        WiFiClient* stream = http.getStreamPtr();
+        auto *stream = http.getStreamPtr();
         if (!stream) {
             reportError(OtaError::DownloadFailed, "Failed to get HTTP stream");
             esp_ota_abort(m_otaHandle);
@@ -757,25 +720,23 @@ namespace isic {
         return true;
     }
 
-    bool OtaService::validateHttpResponse(HTTPClient& http, int httpCode) {
+    bool OtaService::validateHttpResponse(HTTPClient &http, int httpCode) {
         if (m_cancelRequested.load()) {
             reportError(OtaError::Cancelled, "Update cancelled");
             return false;
         }
 
         if (httpCode <= 0) {
-            reportError(OtaError::NetworkError,
-                       std::string("Connection failed: ") + http.errorToString(httpCode).c_str());
+            reportError(OtaError::NetworkError, std::string("Connection failed: ") + HTTPClient::errorToString(httpCode).c_str());
             return false;
         }
 
         if (httpCode != HTTP_CODE_OK) {
-            reportError(mapHttpError(httpCode),
-                       std::string("HTTP error: ") + std::to_string(httpCode));
+            reportError(mapHttpError(httpCode), std::string("HTTP error: ") + std::to_string(httpCode));
             return false;
         }
 
-        const std::int32_t contentLength = http.getSize();
+        const auto contentLength = http.getSize();
 
         if (contentLength <= 0) {
             reportError(OtaError::DownloadFailed, "Unknown content length");
@@ -783,18 +744,16 @@ namespace isic {
         }
 
         if (contentLength < static_cast<std::int32_t>(MIN_FIRMWARE_SIZE)) {
-            reportError(OtaError::ImageTooSmall,
-                       "Firmware too small: " + std::to_string(contentLength) + " bytes");
+            reportError(OtaError::ImageTooSmall, "Firmware too small: " + std::to_string(contentLength) + " bytes");
             return false;
         }
 
         if (contentLength > static_cast<std::int32_t>(MAX_FIRMWARE_SIZE)) {
-            reportError(OtaError::ImageTooLarge,
-                       "Firmware too large: " + std::to_string(contentLength) + " bytes");
+            reportError(OtaError::ImageTooLarge, "Firmware too large: " + std::to_string(contentLength) + " bytes");
             return false;
         }
 
-        LOG_INFO(OTA_TAG, "Firmware size: %d bytes", contentLength);
+        LOG_INFO(OTA_TAG, "Firmware size: %d bytes", static_cast<int>(contentLength));
         return true;
     }
 
@@ -808,20 +767,15 @@ namespace isic {
         }
 
         if (contentLength > static_cast<std::int32_t>(m_updatePartition->size)) {
-            reportError(OtaError::InsufficientSpace,
-                       "Firmware (" + std::to_string(contentLength) +
-                       ") larger than partition (" + std::to_string(m_updatePartition->size) + ")");
+            reportError(OtaError::InsufficientSpace,"Firmware (" + std::to_string(contentLength) + ") larger than partition (" + std::to_string(m_updatePartition->size) + ")");
             return false;
         }
 
-        LOG_INFO(OTA_TAG, "Writing to partition: %s @ 0x%08X",
-                 m_updatePartition->label, m_updatePartition->address);
+        LOG_INFO(OTA_TAG, "Writing to partition: %s @ 0x%08X", m_updatePartition->label, static_cast<unsigned>(m_updatePartition->address));
 
         // Begin OTA with ESP-IDF API
-        esp_err_t err = esp_ota_begin(m_updatePartition, OTA_SIZE_UNKNOWN, &m_otaHandle);
-        if (err != ESP_OK) {
-            reportError(OtaError::EraseError,
-                       std::string("esp_ota_begin failed: ") + esp_err_to_name(err));
+        if (const auto err = esp_ota_begin(m_updatePartition, OTA_SIZE_UNKNOWN, &m_otaHandle); err != ESP_OK) {
+            reportError(OtaError::EraseError, std::string("esp_ota_begin failed: ") + esp_err_to_name(err));
             return false;
         }
 
@@ -834,16 +788,16 @@ namespace isic {
         return true;
     }
 
-    bool OtaService::downloadChunks(WiFiClient& stream, std::int32_t contentLength) {
+    bool OtaService::downloadChunks(WiFiClient &stream, const std::int32_t contentLength) {
         std::uint8_t buffer[DOWNLOAD_BUFFER_SIZE];
         std::uint32_t bytesWritten = 0;
         std::uint64_t lastProgressReport = 0;
         std::uint64_t lastSpeedCalcMs = millis();
         std::uint32_t bytesForSpeed = 0;
 
-        const auto startTime = millis();
-        const auto timeout = m_cfg ? m_cfg->downloadTimeoutMs : 300000;
-        bool firstChunk = true;
+        const auto startTime{millis()};
+        const auto timeout{m_cfg ? m_cfg->downloadTimeoutMs : 300000};
+        auto firstChunk{true};
 
         while (bytesWritten < static_cast<std::uint32_t>(contentLength)) {
             // Check for cancellation
@@ -866,8 +820,7 @@ namespace isic {
                 // Check if connection is still alive
                 if (!stream.connected()) {
                     if (bytesWritten < static_cast<std::uint32_t>(contentLength)) {
-                        reportError(OtaError::DownloadIncomplete,
-                                   "Connection lost at " + std::to_string(bytesWritten) + " bytes");
+                        reportError(OtaError::DownloadIncomplete, "Connection lost at " + std::to_string(bytesWritten) + " bytes");
                         return false;
                     }
                 }
@@ -875,9 +828,9 @@ namespace isic {
             }
 
             // Read chunk
-            const auto available = stream.available();
-            const auto toRead = std::min(available, static_cast<int>(sizeof(buffer)));
-            const auto bytesRead = stream.readBytes(buffer, toRead);
+            const auto available{stream.available()};
+            const auto toRead{std::min(available, static_cast<int>(sizeof(buffer)))};
+            const auto bytesRead{stream.readBytes(buffer, toRead)};
 
             if (bytesRead <= 0) {
                 vTaskDelay(pdMS_TO_TICKS(10));
@@ -892,11 +845,9 @@ namespace isic {
                 firstChunk = false;
             }
 
-            // Write to flash using ESP-IDF OTA API
-            esp_err_t err = esp_ota_write(m_otaHandle, buffer, bytesRead);
-            if (err != ESP_OK) {
+            if (const esp_err_t err = esp_ota_write(m_otaHandle, buffer, bytesRead); err != ESP_OK) {
                 reportError(OtaError::WriteError,
-                           std::string("Flash write failed: ") + esp_err_to_name(err));
+                            std::string("Flash write failed: ") + esp_err_to_name(err));
                 return false;
             }
 
@@ -904,17 +855,14 @@ namespace isic {
             bytesForSpeed += bytesRead;
 
             // Update metrics and report progress periodically
-            const auto now = millis();
-            if (now - lastProgressReport >= PROGRESS_REPORT_INTERVAL_MS) {
+            if (const auto now = millis(); now - lastProgressReport >= PROGRESS_REPORT_INTERVAL_MS) {
                 lastProgressReport = now;
 
-                const auto percent = static_cast<std::uint8_t>(
-                    (bytesWritten * 100) / contentLength
-                );
+                const auto percent {static_cast<std::uint8_t>((bytesWritten * 100) / contentLength)};
 
                 // Calculate speed
-                const auto speedIntervalMs = now - lastSpeedCalcMs;
-                std::uint32_t speedBps = 0;
+                const auto speedIntervalMs{now - lastSpeedCalcMs};
+                std::uint32_t speedBps{0};
                 if (speedIntervalMs > 0) {
                     speedBps = (bytesForSpeed * 1000) / speedIntervalMs;
                     bytesForSpeed = 0;
@@ -928,29 +876,25 @@ namespace isic {
 
                 reportProgress(percent, bytesWritten);
 
-                LOG_DEBUG(OTA_TAG, "Progress: %u%% (%u/%d bytes, %u KB/s)",
-                         percent, bytesWritten, contentLength, speedBps / 1024);
+                LOG_DEBUG(OTA_TAG, "Progress: %u%% (%u/%d bytes, %u KB/s)", percent, unsigned{bytesWritten}, static_cast<int>(contentLength), static_cast<unsigned>(speedBps / 1024));
             }
         }
 
         // Final progress report
         reportProgress(100, bytesWritten);
 
-        LOG_INFO(OTA_TAG, "Download complete: %u bytes in %lu ms",
-                 bytesWritten, millis() - startTime);
+        LOG_INFO(OTA_TAG, "Download complete: %u bytes in %lu ms", unsigned{bytesWritten}, millis() - startTime);
 
         // Verify total bytes match
         if (bytesWritten != static_cast<std::uint32_t>(contentLength)) {
-            reportError(OtaError::ContentLengthMismatch,
-                       "Downloaded " + std::to_string(bytesWritten) +
-                       " but expected " + std::to_string(contentLength));
+            reportError(OtaError::ContentLengthMismatch, "Downloaded " + std::to_string(bytesWritten) + " but expected " + std::to_string(contentLength));
             return false;
         }
 
         return true;
     }
 
-    bool OtaService::verifyImageHeader(const std::uint8_t* data, std::size_t len) {
+    bool OtaService::verifyImageHeader(const std::uint8_t *data, std::size_t len) {
         if (len < 1) {
             reportError(OtaError::MagicByteInvalid, "Empty data");
             return false;
@@ -970,7 +914,7 @@ namespace isic {
         transitionTo(OtaState::Verifying, "Verifying firmware...");
 
         // End OTA write - this verifies the image
-        esp_err_t err = esp_ota_end(m_otaHandle);
+        esp_err_t err{esp_ota_end(m_otaHandle)};
         m_otaHandle = 0;
 
         if (err != ESP_OK) {
@@ -978,7 +922,7 @@ namespace isic {
                 reportError(OtaError::VerificationFailed, "Firmware validation failed");
             } else {
                 reportError(OtaError::WriteError,
-                           std::string("esp_ota_end failed: ") + esp_err_to_name(err));
+                            std::string("esp_ota_end failed: ") + esp_err_to_name(err));
             }
             return false;
         }
@@ -990,65 +934,75 @@ namespace isic {
         // Set the new partition as boot partition
         err = esp_ota_set_boot_partition(m_updatePartition);
         if (err != ESP_OK) {
-            reportError(OtaError::WriteError,
-                       std::string("Failed to set boot partition: ") + esp_err_to_name(err));
+            reportError(OtaError::WriteError, std::string("Failed to set boot partition: ") + esp_err_to_name(err));
             return false;
         }
 
         LOG_INFO(OTA_TAG, "Boot partition set to: %s", m_updatePartition->label);
-
         return true;
     }
 
     // ==================== Partition Operations ====================
 
-    const esp_partition_t* OtaService::getRunningPartitionPtr() const {
+    const esp_partition_t *OtaService::getRunningPartitionPtr() const {
         return esp_ota_get_running_partition();
     }
 
-    const esp_partition_t* OtaService::getNextUpdatePartitionPtr() const {
+    const esp_partition_t *OtaService::getNextUpdatePartitionPtr() const {
         return esp_ota_get_next_update_partition(nullptr);
     }
 
     // ==================== Version Handling ====================
 
-    bool OtaService::isNewerVersion(const std::string& available) const {
+    bool OtaService::isNewerVersion(const std::string &available) const {
         if (!m_cfg || m_cfg->currentVersion.empty() || available.empty()) {
-            return true;  // Assume newer if we can't compare
+            return true; // Assume newer if we can't compare
         }
 
-        int currentMajor, currentMinor, currentPatch;
-        int availableMajor, availableMinor, availablePatch;
+        int currentMajor{};
+        int currentMinor{};
+        int currentPatch{};
+        int availableMajor{};
+        int availableMinor{};
+        int availablePatch{};
 
         if (!parseVersion(m_cfg->currentVersion, currentMajor, currentMinor, currentPatch)) {
-            return true;  // Can't parse current, allow update
+            return true; // Can't parse current, allow update
         }
 
         if (!parseVersion(available, availableMajor, availableMinor, availablePatch)) {
-            return true;  // Can't parse available, allow update
+            return true; // Can't parse available, allow update
         }
 
         // Semantic version comparison
-        if (availableMajor > currentMajor) return true;
-        if (availableMajor < currentMajor) return false;
+        if (availableMajor > currentMajor) {
+            return true;
+        }
+        if (availableMajor < currentMajor) {
+            return false;
+        }
 
-        if (availableMinor > currentMinor) return true;
-        if (availableMinor < currentMinor) return false;
+        if (availableMinor > currentMinor) {
+            return true;
+        }
+        if (availableMinor < currentMinor) {
+            return false;
+        }
 
         return availablePatch > currentPatch;
     }
 
-    bool OtaService::parseVersion(const std::string& version,
-                                   int& major, int& minor, int& patch) const {
+    bool OtaService::parseVersion(const std::string &version,
+                                  int &major, int &minor, int &patch) const {
         major = minor = patch = 0;
 
         // Handle optional 'v' prefix
-        const char* str = version.c_str();
+        const auto *str{version.c_str()};
         if (*str == 'v' || *str == 'V') {
             str++;
         }
 
-        return sscanf(str, "%d.%d.%d", &major, &minor, &patch) >= 2;
+        return sscanf(str, "%d.%d.%d", &major, &minor, &patch) >= 2; // TODO: sscanf is not safe - replace with proper parsing
     }
 
     bool OtaService::isWithinUpdateWindow() const {
@@ -1068,23 +1022,23 @@ namespace isic {
     // ==================== Backoff ====================
 
     std::uint32_t OtaService::calculateBackoff() const {
-        if (!m_cfg) return 60000;
+        if (!m_cfg) {
+            return 60000;
+        }
 
-        const auto baseBackoff = m_cfg->failureBackoffMs;
-        const auto maxBackoff = baseBackoff * 10;  // Max 10x base
+        const auto baseBackoff{m_cfg->failureBackoffMs};
+        const auto maxBackoff{baseBackoff * 10}; // Max 10x base
 
         // Exponential backoff: base * 2^failures
-        auto backoff = baseBackoff * (1U << std::min(m_consecutiveFailures, static_cast<std::uint32_t>(5)));
+        auto backoff{baseBackoff * (1U << std::min(m_consecutiveFailures, static_cast<std::uint32_t>(5)))};
 
         if (backoff > maxBackoff) {
             backoff = maxBackoff;
         }
 
         // Add jitter (±10%)
-        const auto jitter = (random(0, 20) - 10) * static_cast<int32_t>(backoff) / 100;
-        backoff += jitter;
-
-        return backoff;
+        const auto jitter{(random(0, 20) - 10) * static_cast<int32_t>(backoff) / 100};
+        return backoff + jitter;
     }
 
     void OtaService::resetBackoff() {
@@ -1127,10 +1081,10 @@ namespace isic {
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
         };
-        (void)m_bus.publish(evt);
+        (void) m_bus.publish(evt); // TODO: handle publish failure?
     }
 
-    void OtaService::reportError(OtaError error, const std::string& message) {
+    void OtaService::reportError(const OtaError error, const std::string &message) {
         m_lastError = error;
         m_lastErrorMessage = message;
 
@@ -1149,14 +1103,14 @@ namespace isic {
             .timestampMs = static_cast<std::uint64_t>(millis()),
             .priority = EventPriority::E_HIGH
         };
-        (void)m_bus.publish(evt);
+        (void) m_bus.publish(evt); // TODO: handle publish failure?
     }
 
     void OtaService::publishStatusToMqtt() {
         // Status is published via OtaStateChangedEvent which MqttService handles
         // This method can be used for on-demand status publishing
 
-        const auto state = m_state.load();
+        const auto state{m_state.load()};
         const Event evt{
             .type = EventType::OtaStateChanged,
             .payload = OtaStateChangedEvent{
@@ -1167,10 +1121,8 @@ namespace isic {
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
         };
-        (void)m_bus.publish(evt);
+        (void) m_bus.publish(evt); // TODO: handle publish failure?
     }
-
-    // ==================== Wake Lock ====================
 
     void OtaService::acquireWakeLock() {
         if (m_powerService && !m_wakeLock.isValid()) {
@@ -1186,9 +1138,7 @@ namespace isic {
         }
     }
 
-    // ==================== HTTP Error Mapping ====================
-
-    OtaError OtaService::mapHttpError(int httpCode) const {
+    OtaError OtaService::mapHttpError(const int httpCode) const {
         switch (httpCode) {
             case 400: return OtaError::HttpBadRequest;
             case 401: return OtaError::HttpUnauthorized;
@@ -1198,8 +1148,7 @@ namespace isic {
             case 502:
             case 503:
             case 504: return OtaError::HttpServerError;
-            default:  return OtaError::HttpError;
+            default: return  OtaError::HttpError;
         }
     }
-
-}  // namespace isic
+}

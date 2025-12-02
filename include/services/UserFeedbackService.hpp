@@ -34,26 +34,22 @@ namespace isic {
     /**
      * @brief User feedback service for LED and buzzer control.
      *
-     * Provides non-blocking, queued feedback to users for:
-     * - Card read success/failure
-     * - System state changes
-     * - OTA progress
-     *
-     * Design:
-     * - All operations are non-blocking (queued)
-     * - Separate RTOS task handles actual GPIO operations
-     * - Configurable patterns for each signal type
+     * Responsibilities:
+     * - Provide non-blocking feedback via queued patterns
+     * - Support predefined signals (success, error, processing, etc.)
+     * - Allow custom feedback patterns
+     * - Direct control methods for immediate LED/beeper control
+     * - Integrate with EventBus for event-driven feedback
+     * - Enable/disable feedback at runtime
      */
     class UserFeedbackService : public IEventListener {
     public:
         explicit UserFeedbackService(EventBus& bus);
-        ~UserFeedbackService() override;
-
-        // Non-copyable, non-movable
         UserFeedbackService(const UserFeedbackService&) = delete;
         UserFeedbackService& operator=(const UserFeedbackService&) = delete;
         UserFeedbackService(UserFeedbackService&&) = delete;
         UserFeedbackService& operator=(UserFeedbackService&&) = delete;
+        ~UserFeedbackService() override;
 
         /**
          * @brief Initialize the feedback service.

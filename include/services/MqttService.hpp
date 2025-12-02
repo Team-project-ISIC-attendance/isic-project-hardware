@@ -24,11 +24,12 @@
 #include "core/IHealthCheck.hpp"
 #include "core/Result.hpp"
 
+// Forward declaration for dependencies
 namespace isic {
-
-    // Forward declaration
     class PowerService;
+}
 
+namespace isic {
     /**
      * @brief Metrics for MQTT service performance monitoring.
      */
@@ -67,15 +68,13 @@ namespace isic {
     /**
      * @brief Production-grade MQTT service with async publishing and health monitoring.
      *
-     * Features:
-     * - Async outbound message queue (publishing never blocks callers)
-     * - Configurable backpressure handling
-     * - Exponential backoff reconnection
-     * - Health monitoring integration
-     * - Wake lock support for power management
-     * - Comprehensive metrics
-     * - OTA status publishing
-     * - Batched attendance support
+     * Responsibilities:
+     * - Connect to MQTT broker with automatic reconnection
+     * - Non-blocking message publishing via outbound queue
+     * - Handle inbound messages and dispatch events
+     * - Integrate with PowerService for wake locks during publishing
+     * - Provide health status
+     * - Graceful handling of network issues
      */
     class MqttService : public IEventListener, public IHealthCheck {
     public:
@@ -206,7 +205,6 @@ namespace isic {
         // EventBus subscription
         EventBus::ListenerId m_subscriptionId{0};
     };
-
-}  // namespace isic
+}
 
 #endif  // HARDWARE_MQTTSERVICE_HPP

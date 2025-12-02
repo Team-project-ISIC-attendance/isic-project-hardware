@@ -19,16 +19,17 @@
 #include <memory>
 
 #include "AppConfig.hpp"
-#include "core/Events.hpp"
+#include "core/Types.hpp"
 #include "core/EventBus.hpp"
 #include "core/IHealthCheck.hpp"
 #include "core/Result.hpp"
 
+// Forward declarations for PowerService
 namespace isic {
-
-    // Forward declaration
     class PowerService;
+}
 
+namespace isic {
     /**
      * @brief Error codes specific to PN532 operations.
      */
@@ -40,20 +41,20 @@ namespace isic {
         InvalidResponse,
         CardReadFailed,
         RecoveryFailed,
-        HardwareNotFound
+        HardwareNotFound,
     };
 
-    [[nodiscard]] inline constexpr const char* toString(Pn532Error error) noexcept {
+    [[nodiscard]] constexpr const char *toString(const Pn532Error error) noexcept {
         switch (error) {
-            case Pn532Error::None:                 return "none";
-            case Pn532Error::InitFailed:           return "init_failed";
-            case Pn532Error::CommunicationTimeout: return "comm_timeout";
-            case Pn532Error::CommunicationError:   return "comm_error";
-            case Pn532Error::InvalidResponse:      return "invalid_response";
-            case Pn532Error::CardReadFailed:       return "card_read_failed";
-            case Pn532Error::RecoveryFailed:       return "recovery_failed";
-            case Pn532Error::HardwareNotFound:     return "hw_not_found";
-            default:                               return "unknown";
+            case Pn532Error::None:                  return "none";
+            case Pn532Error::InitFailed:            return "init_failed";
+            case Pn532Error::CommunicationTimeout:  return "comm_timeout";
+            case Pn532Error::CommunicationError:    return "comm_error";
+            case Pn532Error::InvalidResponse:       return "invalid_response";
+            case Pn532Error::CardReadFailed:        return "card_read_failed";
+            case Pn532Error::RecoveryFailed:        return "recovery_failed";
+            case Pn532Error::HardwareNotFound:      return "hw_not_found";
+            default:                                return "unknown";
         }
     }
 
@@ -90,30 +91,23 @@ namespace isic {
      * - Configurable timeouts and retry logic
      * - Health monitoring integration
      *
-     * The driver runs its own RTOS task for non-blocking card scanning.
+     * @note The driver runs its own RTOS task for non-blocking card scanning.
      */
     class Pn532Driver : public IHealthCheck, public IEventListener {
     public:
-        /**
-         * @brief Construct PN532 driver with EventBus integration.
-         * @param bus EventBus for publishing events
-         */
-        explicit Pn532Driver(EventBus& bus);
-
+        explicit Pn532Driver(EventBus &bus);
+        Pn532Driver(const Pn532Driver &) = delete;
+        Pn532Driver &operator=(const Pn532Driver &) = delete;
+        Pn532Driver(Pn532Driver &&) = delete;
+        Pn532Driver &operator=(Pn532Driver &&) = delete;
         ~Pn532Driver() override;
-
-        // Non-copyable, non-movable
-        Pn532Driver(const Pn532Driver&) = delete;
-        Pn532Driver& operator=(const Pn532Driver&) = delete;
-        Pn532Driver(Pn532Driver&&) = delete;
-        Pn532Driver& operator=(Pn532Driver&&) = delete;
 
         /**
          * @brief Initialize the driver with configuration.
          * @param cfg PN532 configuration
          * @return Status indicating success or failure
          */
-        [[nodiscard]] Status begin(const Pn532Config& cfg);
+        [[nodiscard]] Status begin(const Pn532Config &cfg);
 
         /**
          * @brief Stop the driver and release resources.
@@ -130,7 +124,7 @@ namespace isic {
         /**
          * @brief Get the complete state information.
          */
-        [[nodiscard]] const Pn532State& getState() const { return m_state; }
+        [[nodiscard]] const Pn532State &getState() const { return m_state; }
 
         /**
          * @brief Check if the PN532 is healthy and ready for card reads.
@@ -185,7 +179,7 @@ namespace isic {
          * @brief Configure the IRQ pin for wake-from-sleep.
          * @param powerService PowerService to configure wake source
          */
-        void configureWakeSource(PowerService& powerService);
+        void configureWakeSource(PowerService &powerService);
 
         /**
          * @brief Put the PN532 into low-power mode.
@@ -203,7 +197,7 @@ namespace isic {
          * @brief Update configuration at runtime.
          * @param cfg New PN532 configuration
          */
-        void updateConfig(const Pn532Config& cfg);
+        void updateConfig(const Pn532Config &cfg);
 
         // ==================== IHealthCheck Interface ====================
 
@@ -213,16 +207,16 @@ namespace isic {
 
         // ==================== IEventListener Interface ====================
 
-        void onEvent(const Event& event) override;
+        void onEvent(const Event &event) override;
 
     private:
         // Internal task for card scanning
-        static void scanTaskThunk(void* arg);
+        static void scanTaskThunk(void *arg);
         void scanTask();
 
         // State management
         void transitionTo(Pn532Status newStatus);
-        void recordError(Pn532Error error, const std::string& message = "");
+        void recordError(Pn532Error error, const std::string &message = "");
         void clearError();
 
         // Hardware operations
@@ -232,11 +226,11 @@ namespace isic {
 
         // Event publishing
         void publishStatusChange(Pn532Status oldStatus, Pn532Status newStatus);
-        void publishError(Pn532Error error, const std::string& message);
-        void publishCardEvent(const CardId& cardId, bool present);
+        void publishError(Pn532Error error, const std::string &message);
+        void publishCardEvent(const CardId &cardId, bool present);
 
         // Configuration
-        const Pn532Config* m_cfg{nullptr};
+        const Pn532Config *m_cfg{nullptr};
 
         // Hardware interface (SPI-based)
         std::unique_ptr<Adafruit_PN532> m_nfc{nullptr};
@@ -251,7 +245,7 @@ namespace isic {
         std::atomic<bool> m_scanTriggered{false};
 
         // EventBus
-        EventBus& m_bus;
+        EventBus &m_bus;
         EventBus::ListenerId m_subscriptionId{0};
 
         // Timing
@@ -259,11 +253,10 @@ namespace isic {
         std::uint64_t m_lastPollMs{0};
 
         // IRQ handling
-        static Pn532Driver* s_instance;
+        static Pn532Driver *s_instance;
         static void IRAM_ATTR irqHandler();
         volatile bool m_irqTriggered{false};
     };
-
-}  // namespace isic
+}
 
 #endif  // HARDWARE_PN532DRIVER_HPP

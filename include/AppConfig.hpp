@@ -500,8 +500,8 @@ namespace isic {
             AppConfig cfg{};
 
             // WiFi defaults
-            cfg.wifi.ssid = "CHANGE_ME";
-            cfg.wifi.password = "CHANGE_ME";
+            cfg.wifi.ssid = "UPC1548499";
+            cfg.wifi.password = "5bpffkLDjzt8";
             cfg.wifi.connectTimeoutMs = 10000;
             cfg.wifi.maxRetries = 5;
 

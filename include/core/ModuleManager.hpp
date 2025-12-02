@@ -17,7 +17,6 @@
 #include "core/EventBus.hpp"
 
 namespace isic {
-
     /**
      * @brief Module registration entry.
      */
@@ -59,13 +58,11 @@ namespace isic {
     class ModuleManager : public IEventListener {
     public:
         explicit ModuleManager(EventBus& bus);
-        ~ModuleManager() override;
-
-        // Non-copyable, non-movable
         ModuleManager(const ModuleManager&) = delete;
         ModuleManager& operator=(const ModuleManager&) = delete;
         ModuleManager(ModuleManager&&) = delete;
         ModuleManager& operator=(ModuleManager&&) = delete;
+        ~ModuleManager() override;
 
         // ==================== Module Registration ====================
 
@@ -88,7 +85,7 @@ namespace isic {
          * @param name Module name
          * @return Pointer to module or nullptr
          */
-        [[nodiscard]] IModule* getModule(std::string_view name);
+        [[nodiscard]] IModule* getModule(std::string_view name) const;
 
         /**
          * @brief Get all registered modules.
@@ -151,13 +148,10 @@ namespace isic {
         void onEvent(const Event& event) override;
 
     private:
-        // Sort modules by priority (descending)
         void sortByPriority();
 
-        // Apply module enable states from config
         void applyModuleConfig(const ModulesConfig& cfg);
 
-        // Publish module state change event
         void publishModuleStateChange(std::string_view name, bool enabled);
 
         EventBus& m_bus;

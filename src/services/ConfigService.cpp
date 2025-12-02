@@ -6,13 +6,13 @@
 
 namespace isic {
     namespace {
-        constexpr auto* CONFIG_SERVICE_TAG{"ConfigService"};
-        constexpr auto* PREF_NAMESPACE{"isic"};
-        constexpr auto* PREF_KEY_CONFIG{"config"};
+        constexpr auto *CONFIG_SERVICE_TAG{"ConfigService"};
+        constexpr auto *PREF_NAMESPACE{"isic"};
+        constexpr auto *PREF_KEY_CONFIG{"config"};
     }
 
-    ConfigService::ConfigService(EventBus& bus) : m_bus(bus) {
-        (void)m_bus.subscribe(this);
+    ConfigService::ConfigService(EventBus &bus) : m_bus(bus) {
+        (void) m_bus.subscribe(this); // TODO: handle unsubscription on destruction if needed
     }
 
     Status ConfigService::begin() {
@@ -25,7 +25,7 @@ namespace isic {
         if (const auto status = load(); !status.ok()) {
             LOG_WARNING(CONFIG_SERVICE_TAG, "Load failed, using defaults");
             m_config = AppConfig::makeDefault();
-            (void)save();
+            (void) save(); // TODO: Attempt to save defaults
         }
 
         notifyUpdated();
@@ -41,7 +41,7 @@ namespace isic {
             return Status::OK();
         }
 
-        JsonDocument doc;
+        JsonDocument doc{};
         if (const auto err = deserializeJson(doc, json); err) {
             LOG_ERROR(CONFIG_SERVICE_TAG, "JSON parse error: %s", err.c_str());
             return Status::Error(ErrorCode::JsonError, "Deserialize failed");
@@ -120,9 +120,8 @@ namespace isic {
             cfg.power.wifiPowerSaveEnabled = power["wifiPowerSaveEnabled"] | cfg.power.wifiPowerSaveEnabled;
             cfg.power.cpuFrequencyMhz = power["cpuFrequencyMhz"] | cfg.power.cpuFrequencyMhz;
 
-            if (power["sleepType"].is<const char*>()) {
-                const std::string sleepType = power["sleepType"].as<const char*>();
-                if (sleepType == "light") {
+            if (power["sleepType"].is<const char *>()) {
+                if (const auto sleepType = power["sleepType"].as<const char *>(); sleepType == "light") {
                     cfg.power.sleepType = PowerConfig::SleepType::Light;
                 } else if (sleepType == "deep") {
                     cfg.power.sleepType = PowerConfig::SleepType::Deep;
@@ -166,12 +165,12 @@ namespace isic {
     }
 
     Status ConfigService::save() {
-        JsonDocument doc;
-        const auto root = doc.to<JsonObject>();
+        JsonDocument doc{};
+        const auto root{doc.to<JsonObject>()};
 
         // WiFi
         {
-            const auto wifi = root["wifi"].to<JsonObject>();
+            const auto wifi{root["wifi"].to<JsonObject>()};
             wifi["ssid"] = m_config.wifi.ssid;
             wifi["password"] = m_config.wifi.password;
             wifi["connectTimeoutMs"] = m_config.wifi.connectTimeoutMs;
@@ -180,7 +179,7 @@ namespace isic {
 
         // MQTT
         {
-            const auto mqtt = root["mqtt"].to<JsonObject>();
+            const auto mqtt{root["mqtt"].to<JsonObject>()};
             mqtt["broker"] = m_config.mqtt.broker;
             mqtt["port"] = m_config.mqtt.port;
             mqtt["username"] = m_config.mqtt.username;
@@ -195,7 +194,7 @@ namespace isic {
 
         // Device
         {
-            const auto device = root["device"].to<JsonObject>();
+            const auto device{root["device"].to<JsonObject>()};
             device["deviceId"] = m_config.device.deviceId;
             device["locationId"] = m_config.device.locationId;
             device["firmwareVersion"] = m_config.device.firmwareVersion;
@@ -203,7 +202,7 @@ namespace isic {
 
         // Attendance
         {
-            const auto att = root["attendance"].to<JsonObject>();
+            const auto att{root["attendance"].to<JsonObject>()};
             att["debounceMs"] = m_config.attendance.debounceMs;
             att["offlineBufferSize"] = m_config.attendance.offlineBufferSize;
             att["eventQueueSize"] = m_config.attendance.eventQueueSize;
@@ -212,7 +211,7 @@ namespace isic {
 
         // OTA
         {
-            const auto ota = root["ota"].to<JsonObject>();
+            const auto ota{root["ota"].to<JsonObject>()};
             ota["autoCheck"] = m_config.ota.autoCheck;
             ota["checkIntervalMs"] = m_config.ota.checkIntervalMs;
             ota["updateServerUrl"] = m_config.ota.updateServerUrl;
@@ -221,7 +220,7 @@ namespace isic {
 
         // PN532
         {
-            const auto pn532 = root["pn532"].to<JsonObject>();
+            const auto pn532{root["pn532"].to<JsonObject>()};
             pn532["irqPin"] = m_config.pn532.irqPin;
             pn532["resetPin"] = m_config.pn532.resetPin;
             pn532["pollIntervalMs"] = m_config.pn532.pollIntervalMs;
@@ -236,7 +235,7 @@ namespace isic {
 
         // Power
         {
-            const auto power = root["power"].to<JsonObject>();
+            const auto power{root["power"].to<JsonObject>()};
             power["sleepEnabled"] = m_config.power.sleepEnabled;
             power["idleTimeoutMs"] = m_config.power.idleTimeoutMs;
             power["wakeCheckIntervalMs"] = m_config.power.wakeCheckIntervalMs;
@@ -246,18 +245,26 @@ namespace isic {
             power["wifiPowerSaveEnabled"] = m_config.power.wifiPowerSaveEnabled;
             power["cpuFrequencyMhz"] = m_config.power.cpuFrequencyMhz;
 
-            const char* sleepType = "none";
+            const auto *sleepType{"none"};
             switch (m_config.power.sleepType) {
-                case PowerConfig::SleepType::Light: sleepType = "light"; break;
-                case PowerConfig::SleepType::Deep:  sleepType = "deep"; break;
-                default: break;
+                case PowerConfig::SleepType::Light: {
+                    sleepType = "light";
+                    break;
+                }
+                case PowerConfig::SleepType::Deep: {
+                    sleepType = "deep";
+                    break;
+                }
+                default: {
+                    break;
+                }
             }
             power["sleepType"] = sleepType;
         }
 
         // Health
         {
-            const auto health = root["health"].to<JsonObject>();
+            const auto health{root["health"].to<JsonObject>()};
             health["checkIntervalMs"] = m_config.health.checkIntervalMs;
             health["reportIntervalMs"] = m_config.health.reportIntervalMs;
             health["publishToMqtt"] = m_config.health.publishToMqtt;
@@ -268,14 +275,14 @@ namespace isic {
 
         // Log
         {
-            const auto log = root["log"].to<JsonObject>();
+            const auto log{root["log"].to<JsonObject>()};
             log["serialLevel"] = static_cast<uint8_t>(m_config.log.serialLevel);
             log["mqttLevel"] = static_cast<uint8_t>(m_config.log.mqttLevel);
             log["includeTimestamps"] = m_config.log.includeTimestamps;
             log["colorOutput"] = m_config.log.colorOutput;
         }
 
-        String json;
+        String json{};
         serializeJson(doc, json);
 
         if (!m_prefs.putString(PREF_KEY_CONFIG, json)) {
@@ -287,66 +294,119 @@ namespace isic {
         return Status::OK();
     }
 
-    Status ConfigService::updateFromJson(const std::string& json) {
-        JsonDocument doc;
+    Status ConfigService::updateFromJson(const std::string &json) {
+        JsonDocument doc{};
         if (const auto err = deserializeJson(doc, json); err) {
             LOG_ERROR(CONFIG_SERVICE_TAG, "JSON parse error in update: %s", err.c_str());
             return Status::Error(ErrorCode::JsonError, "Deserialize failed");
         }
 
-        auto newCfg = m_config;
-        const auto root = doc.as<JsonObject>();
+        auto newCfg{m_config};
+        const auto root{doc.as<JsonObject>()};
 
         // Partial update - only override fields that are present
         if (const auto wifi = root["wifi"].as<JsonObjectConst>()) {
-            if (wifi["ssid"].is<const char*>()) newCfg.wifi.ssid = wifi["ssid"].as<const char*>();
-            if (wifi["password"].is<const char*>()) newCfg.wifi.password = wifi["password"].as<const char*>();
-            if (wifi["connectTimeoutMs"].is<uint32_t>()) newCfg.wifi.connectTimeoutMs = wifi["connectTimeoutMs"].as<uint32_t>();
-            if (wifi["maxRetries"].is<uint8_t>()) newCfg.wifi.maxRetries = wifi["maxRetries"].as<uint8_t>();
+            if (wifi["ssid"].is<const char *>()) {
+                newCfg.wifi.ssid = wifi["ssid"].as<const char *>();
+            }
+            if (wifi["password"].is<const char *>()) {
+                newCfg.wifi.password = wifi["password"].as<const char *>();
+            }
+            if (wifi["connectTimeoutMs"].is<uint32_t>()) {
+                newCfg.wifi.connectTimeoutMs = wifi["connectTimeoutMs"].as<uint32_t>();
+            }
+            if (wifi["maxRetries"].is<uint8_t>()) {
+                newCfg.wifi.maxRetries = wifi["maxRetries"].as<uint8_t>();
+            }
         }
 
         if (const auto mqtt = root["mqtt"].as<JsonObjectConst>()) {
-            if (mqtt["broker"].is<const char*>()) newCfg.mqtt.broker = mqtt["broker"].as<const char*>();
-            if (mqtt["port"].is<uint16_t>()) newCfg.mqtt.port = mqtt["port"].as<uint16_t>();
-            if (mqtt["username"].is<const char*>()) newCfg.mqtt.username = mqtt["username"].as<const char*>();
-            if (mqtt["password"].is<const char*>()) newCfg.mqtt.password = mqtt["password"].as<const char*>();
-            if (mqtt["baseTopic"].is<const char*>()) newCfg.mqtt.baseTopic = mqtt["baseTopic"].as<const char*>();
-            if (mqtt["tls"].is<bool>()) newCfg.mqtt.tls = mqtt["tls"].as<bool>();
-            if (mqtt["keepAliveSeconds"].is<uint32_t>()) newCfg.mqtt.keepAliveSeconds = mqtt["keepAliveSeconds"].as<uint32_t>();
-            if (mqtt["outboundQueueSize"].is<size_t>()) newCfg.mqtt.outboundQueueSize = mqtt["outboundQueueSize"].as<size_t>();
+            if (mqtt["broker"].is<const char *>()) {
+                newCfg.mqtt.broker = mqtt["broker"].as<const char *>();
+            }
+            if (mqtt["port"].is<uint16_t>()) {
+                newCfg.mqtt.port = mqtt["port"].as<uint16_t>();
+            }
+            if (mqtt["username"].is<const char *>()) {
+                newCfg.mqtt.username = mqtt["username"].as<const char *>();
+            }
+            if (mqtt["password"].is<const char *>()) {
+                newCfg.mqtt.password = mqtt["password"].as<const char *>();
+            }
+            if (mqtt["baseTopic"].is<const char *>()) {
+                newCfg.mqtt.baseTopic = mqtt["baseTopic"].as<const char *>();
+            }
+            if (mqtt["tls"].is<bool>()) {
+                newCfg.mqtt.tls = mqtt["tls"].as<bool>();
+            }
+            if (mqtt["keepAliveSeconds"].is<uint32_t>()) {
+                newCfg.mqtt.keepAliveSeconds = mqtt["keepAliveSeconds"].as<uint32_t>();
+            }
+            if (mqtt["outboundQueueSize"].is<size_t>()) {
+                newCfg.mqtt.outboundQueueSize = mqtt["outboundQueueSize"].as<size_t>();
+            }
         }
 
         if (const auto dev = root["device"].as<JsonObjectConst>()) {
-            if (dev["deviceId"].is<const char*>()) newCfg.device.deviceId = dev["deviceId"].as<const char*>();
-            if (dev["locationId"].is<const char*>()) newCfg.device.locationId = dev["locationId"].as<const char*>();
+            if (dev["deviceId"].is<const char *>()) {
+                newCfg.device.deviceId = dev["deviceId"].as<const char *>();
+            }
+            if (dev["locationId"].is<const char *>()) {
+                newCfg.device.locationId = dev["locationId"].as<const char *>();
+            }
         }
 
         if (const auto att = root["attendance"].as<JsonObjectConst>()) {
-            if (att["debounceMs"].is<uint32_t>()) newCfg.attendance.debounceMs = att["debounceMs"].as<uint32_t>();
-            if (att["offlineBufferSize"].is<size_t>()) newCfg.attendance.offlineBufferSize = att["offlineBufferSize"].as<size_t>();
-            if (att["queueHighWatermark"].is<size_t>()) newCfg.attendance.queueHighWatermark = att["queueHighWatermark"].as<size_t>();
+            if (att["debounceMs"].is<uint32_t>()) {
+                newCfg.attendance.debounceMs = att["debounceMs"].as<uint32_t>();
+            }
+            if (att["offlineBufferSize"].is<size_t>()) {
+                newCfg.attendance.offlineBufferSize = att["offlineBufferSize"].as<size_t>();
+            }
+            if (att["queueHighWatermark"].is<size_t>()) {
+                newCfg.attendance.queueHighWatermark = att["queueHighWatermark"].as<size_t>();
+            }
         }
 
         if (const auto pn532 = root["pn532"].as<JsonObjectConst>()) {
-            if (pn532["pollIntervalMs"].is<uint32_t>()) newCfg.pn532.pollIntervalMs = pn532["pollIntervalMs"].as<uint32_t>();
-            if (pn532["healthCheckIntervalMs"].is<uint32_t>()) newCfg.pn532.healthCheckIntervalMs = pn532["healthCheckIntervalMs"].as<uint32_t>();
-            if (pn532["maxConsecutiveErrors"].is<uint8_t>()) newCfg.pn532.maxConsecutiveErrors = pn532["maxConsecutiveErrors"].as<uint8_t>();
+            if (pn532["pollIntervalMs"].is<uint32_t>()) {
+                newCfg.pn532.pollIntervalMs = pn532["pollIntervalMs"].as<uint32_t>();
+            }
+            if (pn532["healthCheckIntervalMs"].is<uint32_t>()) {
+                newCfg.pn532.healthCheckIntervalMs = pn532["healthCheckIntervalMs"].as<uint32_t>();
+            }
+            if (pn532["maxConsecutiveErrors"].is<uint8_t>()) {
+                newCfg.pn532.maxConsecutiveErrors = pn532["maxConsecutiveErrors"].as<uint8_t>();
+            }
         }
 
         if (const auto power = root["power"].as<JsonObjectConst>()) {
-            if (power["sleepEnabled"].is<bool>()) newCfg.power.sleepEnabled = power["sleepEnabled"].as<bool>();
-            if (power["idleTimeoutMs"].is<uint32_t>()) newCfg.power.idleTimeoutMs = power["idleTimeoutMs"].as<uint32_t>();
-            if (power["sleepType"].is<const char*>()) {
-                const std::string sleepType = power["sleepType"].as<const char*>();
-                if (sleepType == "light") newCfg.power.sleepType = PowerConfig::SleepType::Light;
-                else if (sleepType == "deep") newCfg.power.sleepType = PowerConfig::SleepType::Deep;
-                else newCfg.power.sleepType = PowerConfig::SleepType::None;
+            if (power["sleepEnabled"].is<bool>()) {
+                newCfg.power.sleepEnabled = power["sleepEnabled"].as<bool>();
+            }
+            if (power["idleTimeoutMs"].is<uint32_t>()) {
+                newCfg.power.idleTimeoutMs = power["idleTimeoutMs"].as<uint32_t>();
+            }
+            if (power["sleepType"].is<const char *>()) {
+                if (const auto sleepType = power["sleepType"].as<const char *>(); sleepType == "light") {
+                    newCfg.power.sleepType = PowerConfig::SleepType::Light;
+                }
+                else if (sleepType == "deep") {
+                    newCfg.power.sleepType = PowerConfig::SleepType::Deep;
+                }
+                else {
+                    newCfg.power.sleepType = PowerConfig::SleepType::None;
+                }
             }
         }
 
         if (const auto health = root["health"].as<JsonObjectConst>()) {
-            if (health["checkIntervalMs"].is<uint32_t>()) newCfg.health.checkIntervalMs = health["checkIntervalMs"].as<uint32_t>();
-            if (health["reportIntervalMs"].is<uint32_t>()) newCfg.health.reportIntervalMs = health["reportIntervalMs"].as<uint32_t>();
+            if (health["checkIntervalMs"].is<uint32_t>()) {
+                newCfg.health.checkIntervalMs = health["checkIntervalMs"].as<uint32_t>();
+            }
+            if (health["reportIntervalMs"].is<uint32_t>()) {
+                newCfg.health.reportIntervalMs = health["reportIntervalMs"].as<uint32_t>();
+            }
         }
 
         if (!newCfg.validate()) {
@@ -355,7 +415,7 @@ namespace isic {
         }
 
         m_config = newCfg;
-        (void)save();
+        (void) save(); // TODO: handle save error?
         notifyUpdated();
         return Status::OK();
     }
@@ -366,20 +426,19 @@ namespace isic {
             .payload = ConfigUpdatedEvent{&m_config},
             .timestampMs = static_cast<std::uint64_t>(millis())
         };
-        (void)m_bus.publish(evt, portMAX_DELAY);
+        (void) m_bus.publish(evt, portMAX_DELAY); // TODO: handle publish error?
     }
 
-    void ConfigService::onEvent(const Event& event) {
+    void ConfigService::onEvent(const Event &event) {
         // Handle MQTT config update messages
         if (event.type == EventType::MqttMessageReceived) {
-            if (const auto* msg = std::get_if<MqttMessageEvent>(&event.payload)) {
+            if (const auto *msg = std::get_if<MqttMessageEvent>(&event.payload)) {
                 // Check if it's a config update message
                 if (msg->topic.find("/config/set") != std::string::npos) {
                     LOG_INFO(CONFIG_SERVICE_TAG, "Received config update via MQTT");
-                    (void)updateFromJson(msg->payload);
+                    (void) updateFromJson(msg->payload); // TODO: handle update error?
                 }
             }
         }
     }
 }
-

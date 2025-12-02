@@ -24,14 +24,13 @@
 #include "drivers/Pn532Driver.hpp"
 #include "services/PowerService.hpp"
 
-// Forward declarations
+// Forward declarations for dependencies
 namespace isic {
     class UserFeedbackService;
     class AttendanceBatcher;
 }
 
 namespace isic {
-
     /**
      * @brief Metrics for monitoring attendance processing performance.
      */
@@ -137,7 +136,7 @@ namespace isic {
         // ==================== Metrics & Status ====================
 
         [[nodiscard]] AttendanceMetrics getMetrics() const;
-        [[nodiscard]] std::size_t getOfflineBufferCount() const;
+        [[nodiscard]] std::uint32_t getOfflineBufferCount() const;
         void flushOfflineBuffer();
         [[nodiscard]] bool isHighLoad() const;
 

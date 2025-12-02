@@ -3,7 +3,7 @@
 
 /**
  * @file Result.hpp
- * @brief Error handling types for C++20 embedded systems.
+ * @brief Error handling types
  *
  * This file provides a lightweight `Result<T>` type similar to C++23's
  * `std::expected`, but compatible with C++20 and suitable for embedded
@@ -14,7 +14,6 @@
 #include <optional>
 
 namespace isic {
-
     /**
      * @brief Error codes for operations throughout the system.
      *
@@ -40,8 +39,6 @@ namespace isic {
         OperationFailed,
         Cancelled,
         Unknown,
-
-        Count  // Number of error codes
     };
 
     /**
@@ -49,7 +46,7 @@ namespace isic {
      * @param code Error code to convert
      * @return Null-terminated string literal (never nullptr)
      */
-    [[nodiscard]] inline constexpr const char* toString(ErrorCode code) noexcept {
+    [[nodiscard]] constexpr const char* toString(ErrorCode code) noexcept {
         switch (code) {
             case ErrorCode::Ok:                return "ok";
             case ErrorCode::StorageError:      return "storage_error";
@@ -83,42 +80,25 @@ namespace isic {
         const char* message{""};
 
         constexpr Status() noexcept = default;
+        constexpr Status(const ErrorCode code, const char* message) noexcept : code(code), message(message) {}
+        ~Status() = default;
 
-        constexpr Status(const ErrorCode code, const char* message) noexcept : code(code), message(message) {
-
-        }
-
-        /**
-         * @brief Check if operation was successful.
-         */
         [[nodiscard]] constexpr bool ok() const noexcept {
             return code == ErrorCode::Ok;
         }
 
-        /**
-         * @brief Check if operation failed.
-         */
         [[nodiscard]] constexpr bool failed() const noexcept {
             return code != ErrorCode::Ok;
         }
 
-        /**
-         * @brief Explicit conversion to bool.
-         */
         [[nodiscard]] constexpr explicit operator bool() const noexcept {
             return ok();
         }
 
-        /**
-         * @brief Create a success status.
-         */
         [[nodiscard]] static constexpr Status OK() noexcept {
             return Status{ErrorCode::Ok, ""};
         }
 
-        /**
-         * @brief Create an error status.
-         */
         [[nodiscard]] static constexpr Status Error(ErrorCode code, const char* msg = "") noexcept {
             return Status{code, msg};
         }
@@ -153,54 +133,31 @@ namespace isic {
         T value{};
 
         constexpr Result() noexcept = default;
+        constexpr explicit Result(T val) noexcept : status(Status::OK()), value(std::move(val)) {}
+        constexpr explicit Result(const Status err) noexcept : status(err), value{} {}
+        constexpr Result(const ErrorCode code, const char* msg) noexcept : status(Status::Error(code, msg)), value{} {}
+        ~Result() = default;
 
-        constexpr explicit Result(T val) noexcept : status(Status::OK()), value(std::move(val)) {
-        }
-
-        constexpr explicit Result(const Status err) noexcept : status(err), value{} {
-        }
-
-        constexpr Result(const ErrorCode code, const char* msg) noexcept : status(Status::Error(code, msg)), value{} {
-        }
-
-        /**
-         * @brief Check if result contains a value.
-         */
         [[nodiscard]] constexpr bool ok() const noexcept {
             return status.ok();
         }
 
-        /**
-         * @brief Check if result contains an error.
-         */
         [[nodiscard]] constexpr bool failed() const noexcept {
             return status.failed();
         }
 
-        /**
-         * @brief Explicit conversion to bool.
-         */
         [[nodiscard]] constexpr explicit operator bool() const noexcept {
             return ok();
         }
 
-        /**
-         * @brief Get value or default if error.
-         */
         [[nodiscard]] constexpr T valueOr(T defaultValue) const noexcept {
             return ok() ? value : defaultValue;
         }
 
-        /**
-         * @brief Create a success result with value.
-         */
         [[nodiscard]] static constexpr Result<T> Ok(T val) noexcept {
             return Result<T>{std::move(val)};
         }
 
-        /**
-         * @brief Create an error result.
-         */
         [[nodiscard]] static constexpr Result<T> Error(const ErrorCode code, const char* msg = "") noexcept {
             return Result<T>{Status::Error(code, msg)};
         }
@@ -216,19 +173,18 @@ namespace isic {
         Status status{Status::OK()};
 
         constexpr Result() noexcept = default;
-
-        constexpr explicit Result(const Status s) noexcept : status(s) {
-        }
-
-        constexpr Result(const ErrorCode code, const char* msg) noexcept : status(Status::Error(code, msg)) {
-        }
+        constexpr explicit Result(const Status s) noexcept : status(s) {}
+        constexpr Result(const ErrorCode code, const char* msg) noexcept : status(Status::Error(code, msg)) {}
+        ~Result() = default;
 
         [[nodiscard]] constexpr bool ok() const noexcept {
             return status.ok();
         }
+
         [[nodiscard]] constexpr bool failed() const noexcept {
             return status.failed();
         }
+
         [[nodiscard]] constexpr explicit operator bool() const noexcept {
             return ok();
         }
@@ -236,11 +192,12 @@ namespace isic {
         [[nodiscard]] static constexpr Result<void> Ok() noexcept {
             return Result<void>{};
         }
+
         [[nodiscard]] static constexpr Result<void> Error(const ErrorCode code, const char* msg = "") noexcept {
             return Result<void>{Status::Error(code, msg)};
         }
     };
 
-}  // namespace isic
+}
 
 #endif  // HARDWARE_RESULT_HPP

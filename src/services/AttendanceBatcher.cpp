@@ -6,7 +6,6 @@
 #include <ArduinoJson.h>
 
 namespace isic {
-
     namespace {
         constexpr auto* BATCHER_TAG = "Batcher";
         constexpr std::uint32_t TASK_LOOP_MS = 100;
@@ -74,8 +73,9 @@ namespace isic {
             1
         );
 
-        LOG_INFO(BATCHER_TAG, "AttendanceBatcher started: maxBatch=%zu, flushInterval=%ums",
-                 m_cfg->batchMaxSize, m_cfg->batchFlushIntervalMs);
+        LOG_INFO(BATCHER_TAG, "AttendanceBatcher started: maxBatch=%u, flushInterval=%ums",
+                 static_cast<unsigned>(m_cfg->batchMaxSize),
+                 m_cfg->batchFlushIntervalMs);
 
         return Status::OK();
     }
@@ -180,8 +180,9 @@ namespace isic {
     void AttendanceBatcher::updateConfig(const AttendanceConfig& cfg) {
         m_cfg = &cfg;
         m_enabled.store(cfg.batchingEnabled);
-        LOG_INFO(BATCHER_TAG, "Config updated: enabled=%s, maxBatch=%zu",
-                 cfg.batchingEnabled ? "yes" : "no", cfg.batchMaxSize);
+        LOG_INFO(BATCHER_TAG, "Config updated: enabled=%s, maxBatch=%u",
+                 cfg.batchingEnabled ? "yes" : "no",
+                 static_cast<unsigned>(cfg.batchMaxSize));
     }
 
     void AttendanceBatcher::setEnabled(bool enabled) {
@@ -320,7 +321,8 @@ namespace isic {
             return;
         }
 
-        LOG_DEBUG(BATCHER_TAG, "Flushing batch with %zu records", m_currentBatch.count);
+        LOG_DEBUG(BATCHER_TAG, "Flushing batch with %u records",
+                  static_cast<unsigned>(m_currentBatch.count));
 
         // Try to send directly if MQTT is connected
         if (m_mqttConnected.load() && sendBatch(m_currentBatch)) {
@@ -362,7 +364,8 @@ namespace isic {
         }
 
         if (success) {
-            LOG_INFO(BATCHER_TAG, "Batch sent: %zu records", batch.count);
+            LOG_INFO(BATCHER_TAG, "Batch sent: %u records",
+                     static_cast<unsigned>(batch.count));
         } else {
             LOG_WARNING(BATCHER_TAG, "Failed to send batch");
         }
@@ -395,7 +398,8 @@ namespace isic {
 
         xSemaphoreGive(m_pendingMutex);
 
-        LOG_DEBUG(BATCHER_TAG, "Buffered batch, pending=%zu", m_pendingCount);
+        LOG_DEBUG(BATCHER_TAG, "Buffered batch, pending=%u",
+                  static_cast<unsigned>(m_pendingCount));
     }
 
     void AttendanceBatcher::tryFlushPendingBuffers() {
@@ -438,7 +442,8 @@ namespace isic {
         xSemaphoreGive(m_pendingMutex);
 
         if (flushed > 0) {
-            LOG_INFO(BATCHER_TAG, "Flushed %zu pending batches", flushed);
+            LOG_INFO(BATCHER_TAG, "Flushed %u pending batches",
+                     static_cast<unsigned>(flushed));
         }
     }
 

@@ -4,49 +4,48 @@
 #include "core/Logger.hpp"
 
 namespace isic {
-
     namespace {
-        constexpr auto* ATT_TAG = "Attendance";
-        constexpr auto* ATT_TASK_NAME = "attendance";
-        constexpr std::uint32_t ATT_TASK_LOOP_MS = 50;
+        constexpr auto *ATT_TAG{"Attendance"};
+        constexpr auto *ATT_TASK_NAME{"attendance"};
+        constexpr std::uint32_t ATT_TASK_LOOP_MS{50};
     }
 
-    AttendanceModule::AttendanceModule(EventBus& bus, Pn532Driver& pn532, PowerService& powerService)
-        : m_bus(bus)
-        , m_pn532(pn532)
-        , m_powerService(powerService) {
+    AttendanceModule::AttendanceModule(EventBus &bus, Pn532Driver &pn532, PowerService &powerService) : m_bus(bus) , m_pn532(pn532), m_powerService(powerService) {
         m_offlineMutex = xSemaphoreCreateMutex();
         m_metricsMutex = xSemaphoreCreateMutex();
     }
 
     AttendanceModule::~AttendanceModule() {
         AttendanceModule::stop();
+
         if (m_cardQueue) {
             vQueueDelete(m_cardQueue);
             m_cardQueue = nullptr;
         }
+
         if (m_offlineMutex) {
             vSemaphoreDelete(m_offlineMutex);
             m_offlineMutex = nullptr;
         }
+
         if (m_metricsMutex) {
             vSemaphoreDelete(m_metricsMutex);
             m_metricsMutex = nullptr;
         }
+
         if (m_subscriptionId != 0) {
             m_bus.unsubscribe(m_subscriptionId);
             m_subscriptionId = 0;
         }
     }
 
-    Status AttendanceModule::begin(const AppConfig& cfg) {
+    Status AttendanceModule::begin(const AppConfig &cfg) {
         m_cfg = &cfg;
         m_attCfg = &cfg.attendance;
         m_startTimeMs = millis();
 
         // Create card event queue with configured size
-        const auto queueSize = m_attCfg->eventQueueSize > 0
-            ? m_attCfg->eventQueueSize : CARD_QUEUE_SIZE;
+        const auto queueSize{m_attCfg->eventQueueSize > 0 ? m_attCfg->eventQueueSize : CARD_QUEUE_SIZE};
 
         m_cardQueue = xQueueCreate(queueSize, sizeof(CardScannedEvent));
         if (!m_cardQueue) {
@@ -63,17 +62,15 @@ namespace isic {
         m_subscriptionId = m_bus.subscribe(
             this,
             EventFilter::only(EventType::CardScanned)
-                .include(EventType::CardReadError)
-                .include(EventType::MqttConnected)
-                .include(EventType::MqttDisconnected)
-                .include(EventType::ConfigUpdated));
+            .include(EventType::CardReadError)
+            .include(EventType::MqttConnected)
+            .include(EventType::MqttDisconnected)
+            .include(EventType::ConfigUpdated)
+        );
 
         setState(ModuleState::Initialized);
 
-        LOG_INFO(ATT_TAG, "AttendanceModule initialized: debounce=%ums, buffer=%zu, batching=%s",
-                 m_attCfg->debounceMs, m_attCfg->offlineBufferSize,
-                 m_attCfg->batchingEnabled ? "on" : "off");
-
+        LOG_INFO(ATT_TAG, "AttendanceModule initialized: debounce=%ums, buffer=%u, batching=%s", unsigned{m_attCfg->debounceMs}, unsigned{m_attCfg->offlineBufferSize}, m_attCfg->batchingEnabled ? "on" : "off");
         return Status::OK();
     }
 
@@ -120,16 +117,16 @@ namespace isic {
         LOG_INFO(ATT_TAG, "AttendanceModule stopped");
     }
 
-    void AttendanceModule::handleEvent(const Event& event) {
+    void AttendanceModule::handleEvent(const Event &event) {
         switch (event.type) {
             case EventType::CardScanned: {
-                if (const auto* cs = std::get_if<CardScannedEvent>(&event.payload)) {
+                if (const auto *cs = std::get_if<CardScannedEvent>(&event.payload)) {
                     onCardScanned(*cs);
                 }
                 break;
             }
             case EventType::CardReadError: {
-                if (const auto* err = std::get_if<CardReadErrorEvent>(&event.payload)) {
+                if (const auto *err = std::get_if<CardReadErrorEvent>(&event.payload)) {
                     onCardReadError(*err);
                 }
                 break;
@@ -141,7 +138,7 @@ namespace isic {
                 onMqttDisconnected();
                 break;
             case EventType::ConfigUpdated: {
-                if (const auto* ce = std::get_if<ConfigUpdatedEvent>(&event.payload)) {
+                if (const auto *ce = std::get_if<ConfigUpdatedEvent>(&event.payload)) {
                     if (ce->config) {
                         handleConfigUpdate(*ce->config);
                     }
@@ -153,7 +150,7 @@ namespace isic {
         }
     }
 
-    void AttendanceModule::handleConfigUpdate(const AppConfig& config) {
+    void AttendanceModule::handleConfigUpdate(const AppConfig &config) {
         m_cfg = &config;
         m_attCfg = &config.attendance;
 
@@ -167,8 +164,7 @@ namespace isic {
             xSemaphoreGive(m_offlineMutex);
         }
 
-        LOG_INFO(ATT_TAG, "Config updated: debounce=%ums, buffer=%zu",
-                 m_attCfg->debounceMs, m_attCfg->offlineBufferSize);
+        LOG_INFO(ATT_TAG, "Config updated: debounce=%ums, buffer=%u", unsigned{m_attCfg->debounceMs}, unsigned{m_attCfg->offlineBufferSize});
     }
 
     HealthStatus AttendanceModule::getHealth() const {
@@ -207,20 +203,22 @@ namespace isic {
 
     AttendanceMetrics AttendanceModule::getMetrics() const {
         AttendanceMetrics result{};
+
         if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             result = m_metrics;
             xSemaphoreGive(m_metricsMutex);
         }
+
         return result;
     }
 
-    std::size_t AttendanceModule::getOfflineBufferCount() const {
+    std::uint32_t AttendanceModule::getOfflineBufferCount() const {
         if (xSemaphoreTake(m_offlineMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
             return 0;
         }
 
-        std::size_t count = 0;
-        for (const auto& entry : m_offlineBuffer) {
+        std::uint32_t count = 0;
+        for (const auto &entry: m_offlineBuffer) {
             if (entry.pending) {
                 ++count;
             }
@@ -237,14 +235,15 @@ namespace isic {
 
     bool AttendanceModule::isHighLoad() const {
         if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            const bool result = m_metrics.highLoadDetected;
+            const auto result{m_metrics.highLoadDetected};
             xSemaphoreGive(m_metricsMutex);
             return result;
         }
+
         return false;
     }
 
-    void AttendanceModule::onCardScanned(const CardScannedEvent& event) {
+    void AttendanceModule::onCardScanned(const CardScannedEvent &event) {
         if (!m_cardQueue) {
             return;
         }
@@ -268,7 +267,7 @@ namespace isic {
                 },
                 .timestampMs = static_cast<std::uint64_t>(millis())
             };
-            (void)m_bus.publish(evt);
+            (void) m_bus.publish(evt); // TODO: handle publish failure?
         } else {
             if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 m_metrics.eventsQueued++;
@@ -281,7 +280,7 @@ namespace isic {
         }
     }
 
-    void AttendanceModule::onCardReadError(const CardReadErrorEvent& event) {
+    void AttendanceModule::onCardReadError(const CardReadErrorEvent &event) {
         LOG_WARNING(ATT_TAG, "Card read error: %s", toString(event.error));
         signalError();
     }
@@ -297,8 +296,8 @@ namespace isic {
         LOG_INFO(ATT_TAG, "MQTT disconnected, buffering locally");
     }
 
-    void AttendanceModule::processingTaskThunk(void* arg) {
-        static_cast<AttendanceModule*>(arg)->processingTask();
+    void AttendanceModule::processingTaskThunk(void *arg) {
+        static_cast<AttendanceModule *>(arg)->processingTask();
     }
 
     void AttendanceModule::processingTask() {
@@ -343,34 +342,33 @@ namespace isic {
         vTaskDelete(nullptr);
     }
 
-    bool AttendanceModule::shouldProcessCard(const CardId& cardId, std::uint64_t timestamp) {
+    bool AttendanceModule::shouldProcessCard(const CardId &cardId, std::uint64_t timestamp) {
         if (!m_attCfg) {
             return true;
         }
 
-        for (auto& entry : m_recentCards) {
-            if (entry.valid && entry.cardId == cardId) {
-                const auto elapsed = timestamp - entry.lastSeenMs;
-                if (elapsed < m_attCfg->debounceMs) {
+        for (auto &[id, lastSeenMs, valid]: m_recentCards) {
+            if (valid && id == cardId) {
+                if (const auto elapsed = timestamp - lastSeenMs; elapsed < m_attCfg->debounceMs) {
                     return false;
                 }
-                entry.lastSeenMs = timestamp;
+                lastSeenMs = timestamp;
                 return true;
             }
         }
 
-        auto& slot = m_recentCards[m_recentCardsIndex];
-        slot.cardId = cardId;
-        slot.lastSeenMs = timestamp;
-        slot.valid = true;
+        auto &[id, lastSeenMs, valid]{m_recentCards[m_recentCardsIndex]};
+        id = cardId;
+        lastSeenMs = timestamp;
+        valid = true;
 
         m_recentCardsIndex = (m_recentCardsIndex + 1) % DEBOUNCE_CACHE_SIZE;
 
         return true;
     }
 
-    void AttendanceModule::processCard(const CardScannedEvent& event) {
-        const auto now = millis();
+    void AttendanceModule::processCard(const CardScannedEvent &event) {
+        const auto now{millis()};
 
         if (!shouldProcessCard(event.cardId, event.timestampMs)) {
             if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -402,15 +400,11 @@ namespace isic {
         // Signal success feedback
         signalSuccess();
 
-        LOG_INFO(ATT_TAG, "Card processed: %02X%02X%02X%02X... seq=%u",
-                 record.cardId[0], record.cardId[1],
-                 record.cardId[2], record.cardId[3],
-                 record.sequenceNumber);
-
+        LOG_INFO(ATT_TAG, "Card processed: %02X%02X%02X%02X%02X%02X%02X seq=%u", record.cardId[0], record.cardId[1], record.cardId[2], record.cardId[3], record.cardId[4], record.cardId[5], record.cardId[6], unsigned{record.sequenceNumber});
         enqueueAttendance(record);
     }
 
-    void AttendanceModule::enqueueAttendance(const AttendanceRecord& record) {
+    void AttendanceModule::enqueueAttendance(const AttendanceRecord &record) {
         // If batching is enabled and batcher is available, use it
         if (m_attCfg && m_attCfg->batchingEnabled && m_batcher) {
             if (m_batcher->addRecord(record)) {
@@ -431,7 +425,7 @@ namespace isic {
         }
     }
 
-    void AttendanceModule::publishAttendance(const AttendanceRecord& record) {
+    void AttendanceModule::publishAttendance(const AttendanceRecord &record) {
         const Event evt{
             .type = EventType::AttendanceRecorded,
             .payload = record,
@@ -450,27 +444,26 @@ namespace isic {
         }
     }
 
-    void AttendanceModule::bufferForOffline(const AttendanceRecord& record) {
+    void AttendanceModule::bufferForOffline(const AttendanceRecord &record) {
         if (xSemaphoreTake(m_offlineMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
             LOG_ERROR(ATT_TAG, "Failed to acquire offline buffer mutex");
             return;
         }
 
-        auto& slot = m_offlineBuffer[m_offlineTail];
+        auto &[attendanceRecord, pending, sendAttempts] = m_offlineBuffer[m_offlineTail];
 
-        if (slot.pending) {
+        if (pending) {
             LOG_WARNING(ATT_TAG, "Offline buffer full, overwriting oldest record");
         }
 
-        slot.record = record;
-        slot.pending = true;
-        slot.sendAttempts = 0;
+        attendanceRecord = record;
+        pending = true;
+        sendAttempts = 0;
 
         m_offlineTail = (m_offlineTail + 1) % m_offlineBuffer.size();
 
         xSemaphoreGive(m_offlineMutex);
-
-        LOG_DEBUG(ATT_TAG, "Buffered for offline: seq=%u", record.sequenceNumber);
+        LOG_DEBUG(ATT_TAG, "Buffered for offline: seq=%u", unsigned{record.sequenceNumber});
     }
 
     bool AttendanceModule::hasOfflineRecords() const {
@@ -478,8 +471,8 @@ namespace isic {
             return false;
         }
 
-        bool hasPending = false;
-        for (const auto& entry : m_offlineBuffer) {
+        auto hasPending{false};
+        for (const auto &entry: m_offlineBuffer) {
             if (entry.pending) {
                 hasPending = true;
                 break;
@@ -499,36 +492,35 @@ namespace isic {
             return;
         }
 
-        std::size_t flushed = 0;
+        std::uint32_t flushed = 0;
 
-        for (auto& entry : m_offlineBuffer) {
-            if (!entry.pending) {
+        for (auto &[record, pending, sendAttempts]: m_offlineBuffer) {
+            if (!pending) {
                 continue;
             }
 
-            if (entry.sendAttempts >= MAX_SEND_ATTEMPTS) {
-                entry.pending = false;
-                LOG_WARNING(ATT_TAG, "Dropping offline record after %u attempts",
-                           MAX_SEND_ATTEMPTS);
+            if (sendAttempts >= MAX_SEND_ATTEMPTS) {
+                pending = false;
+                LOG_WARNING(ATT_TAG, "Dropping offline record after %u attempts", unsigned{MAX_SEND_ATTEMPTS});
                 continue;
             }
 
             const Event evt{
                 .type = EventType::AttendanceRecorded,
-                .payload = entry.record,
+                .payload = record,
                 .timestampMs = static_cast<std::uint64_t>(millis())
             };
 
             xSemaphoreGive(m_offlineMutex);
 
-            const bool published = m_bus.publish(evt, pdMS_TO_TICKS(50));
+            const bool published{m_bus.publish(evt, pdMS_TO_TICKS(50))};
 
             if (xSemaphoreTake(m_offlineMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
                 return;
             }
 
             if (published) {
-                entry.pending = false;
+                pending = false;
                 ++flushed;
 
                 if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -536,7 +528,7 @@ namespace isic {
                     xSemaphoreGive(m_metricsMutex);
                 }
             } else {
-                entry.sendAttempts++;
+                sendAttempts++;
             }
 
             if (flushed >= 10) {
@@ -547,7 +539,7 @@ namespace isic {
         xSemaphoreGive(m_offlineMutex);
 
         if (flushed > 0) {
-            LOG_INFO(ATT_TAG, "Flushed %zu offline records", flushed);
+            LOG_INFO(ATT_TAG, "Flushed %u offline records", unsigned{flushed});
         }
     }
 
@@ -556,10 +548,10 @@ namespace isic {
             return;
         }
 
-        const auto queueSize = uxQueueMessagesWaiting(m_cardQueue);
-        const bool highLoad = queueSize >= m_attCfg->queueHighWatermark;
+        const auto queueSize{uxQueueMessagesWaiting(m_cardQueue)};
+        const auto highLoad{queueSize >= m_attCfg->queueHighWatermark};
 
-        bool wasHighLoad = false;
+        auto wasHighLoad{false};
         if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
             wasHighLoad = m_metrics.highLoadDetected;
             m_metrics.highLoadDetected = highLoad;
@@ -573,8 +565,7 @@ namespace isic {
     }
 
     void AttendanceModule::emitHighLoadEvent() {
-        LOG_WARNING(ATT_TAG, "High load detected, queue size: %zu/%zu",
-                   m_metrics.currentQueueSize, CARD_QUEUE_SIZE);
+        LOG_WARNING(ATT_TAG, "High load detected, queue size: %u/%u", unsigned{m_metrics.currentQueueSize}, unsigned{CARD_QUEUE_SIZE});
 
         const Event evt{
             .type = EventType::HighLoadDetected,
@@ -587,7 +578,7 @@ namespace isic {
             .timestampMs = static_cast<std::uint64_t>(millis()),
             .priority = EventPriority::E_HIGH
         };
-        (void)m_bus.publish(evt);
+        (void) m_bus.publish(evt); // TODO: handle publish failure?
     }
 
     void AttendanceModule::signalSuccess() {
@@ -603,7 +594,7 @@ namespace isic {
                 },
                 .timestampMs = static_cast<std::uint64_t>(millis())
             };
-            (void)m_bus.publish(evt);
+            (void) m_bus.publish(evt); // TODO: handle publish failure?
         }
     }
 
@@ -619,8 +610,7 @@ namespace isic {
                 },
                 .timestampMs = static_cast<std::uint64_t>(millis())
             };
-            (void)m_bus.publish(evt);
+            (void) m_bus.publish(evt); // TODO: handle publish failure?
         }
     }
-
-}  // namespace isic
+}

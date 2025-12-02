@@ -14,7 +14,7 @@
 #include <cstdint>
 
 #include "AppConfig.hpp"
-#include "core/Events.hpp"
+#include "core/Types.hpp"
 #include "core/EventBus.hpp"
 
 namespace isic {

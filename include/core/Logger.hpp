@@ -3,9 +3,11 @@
 
 /**
  * @file Logger.hpp
- * @brief Logging utilities for embedded C++20 systems.
+ * @brief Logging utilities
  *
  * Provides compile-time log level selection and type-safe logging macros.
+ *
+ * @note Designed for use with Arduino framework (Serial). So far only supports serial output.
  */
 
 #include <Arduino.h>
@@ -13,7 +15,6 @@
 #include <cstdint>
 
 namespace isic {
-
     /**
      * @brief Log severity levels.
      *
@@ -25,8 +26,6 @@ namespace isic {
         Info,
         Warn,
         Error,
-
-        Count  // Sentinel for iteration
     };
 
     /**
@@ -34,7 +33,7 @@ namespace isic {
      * @param lvl Log level to convert
      * @return Single character string representation
      */
-    [[nodiscard]] inline constexpr const char* toString(LogLevel lvl) noexcept {
+    [[nodiscard]] constexpr const char* toString(const LogLevel lvl) noexcept {
         switch (lvl) {
             case LogLevel::Trace: return "T";
             case LogLevel::Debug: return "D";
@@ -44,7 +43,6 @@ namespace isic {
             default:              return "?";
         }
     }
-
 }
 
 /**

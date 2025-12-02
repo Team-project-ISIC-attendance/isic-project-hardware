@@ -72,15 +72,12 @@
 #include <esp_system.h>
 #include <WiFiClient.h>
 
-// Forward declaration
+// Forward declaration for dependencies
 namespace isic {
     class PowerService;
 }
 
 namespace isic {
-
-    // ==================== OTA Command Types ====================
-
     /**
      * @brief OTA command action types (received via MQTT).
      */
@@ -90,10 +87,10 @@ namespace isic {
         Check,          // Check for available updates
         Cancel,         // Cancel in-progress update
         MarkValid,      // Manually mark current partition as valid
-        GetStatus       // Request current OTA status
+        GetStatus,      // Request current OTA status
     };
 
-    [[nodiscard]] inline constexpr const char* toString(OtaAction action) noexcept {
+    [[nodiscard]] constexpr const char* toString(OtaAction action) noexcept {
         switch (action) {
             case OtaAction::Update:    return "update";
             case OtaAction::Rollback:  return "rollback";
@@ -150,7 +147,7 @@ namespace isic {
         std::uint32_t bytesDownloaded{0};
         std::uint32_t totalBytes{0};
         std::uint8_t progressPercent{0};
-        std::uint32_t downloadSpeedBps{0};  // Bytes per second
+        std::uint32_t downloadSpeedBps{0};
 
         // Partition info
         std::string currentPartition{};
@@ -211,10 +208,10 @@ namespace isic {
         SameVersion,
         OutsideUpdateWindow,
         RollbackFailed,
-        InternalError
+        InternalError,
     };
 
-    [[nodiscard]] inline constexpr const char* toString(OtaError error) noexcept {
+    [[nodiscard]] constexpr const char* toString(const OtaError error) noexcept {
         switch (error) {
             case OtaError::None:                  return "none";
             case OtaError::NetworkError:          return "network_error";

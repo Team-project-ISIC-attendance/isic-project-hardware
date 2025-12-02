@@ -2,17 +2,15 @@
 #include "core/Logger.hpp"
 
 namespace isic {
-
     namespace {
-        constexpr auto* EVENT_TAG = "EventBus";
-        constexpr std::size_t MAX_LISTENERS = 32;
+        constexpr auto *EVENT_TAG{"EventBus"};
+        constexpr std::uint32_t MAX_LISTENERS{32};
     }
 
-    EventBus::EventBus(const Config& cfg) : m_config(cfg) {
+    EventBus::EventBus(const Config &cfg) : m_config(cfg) {
         m_queue = xQueueCreate(cfg.queueLength, sizeof(Event));
         m_highPriorityQueue = xQueueCreate(cfg.highPriorityQueueLength, sizeof(Event));
         m_listenersMutex = xSemaphoreCreateMutex();
-        m_metricsMutex = xSemaphoreCreateMutex();
         m_listeners.reserve(MAX_LISTENERS);
     }
 
@@ -33,11 +31,6 @@ namespace isic {
             vSemaphoreDelete(m_listenersMutex);
             m_listenersMutex = nullptr;
         }
-
-        if (m_metricsMutex) {
-            vSemaphoreDelete(m_metricsMutex);
-            m_metricsMutex = nullptr;
-        }
     }
 
     void EventBus::start() {
@@ -57,8 +50,7 @@ namespace isic {
             m_config.taskCore
         );
 
-        LOG_INFO(EVENT_TAG, "EventBus started: queue=%zu, hiPri=%zu",
-                 m_config.queueLength, m_config.highPriorityQueueLength);
+        LOG_INFO(EVENT_TAG, "EventBus started: queue=%u, hiPri=%u", unsigned{m_config.queueLength}, unsigned{m_config.highPriorityQueueLength});
     }
 
     void EventBus::stop() {
@@ -68,14 +60,12 @@ namespace isic {
             // Give task time to exit cleanly
             vTaskDelay(pdMS_TO_TICKS(200));
             // Force delete if still running
-            if (m_taskHandle) {
-                vTaskDelete(m_taskHandle);
-            }
+            vTaskDelete(m_taskHandle);
             m_taskHandle = nullptr;
         }
     }
 
-    EventBus::ListenerId EventBus::subscribe(IEventListener* listener, EventFilter filter) {
+    EventBus::ListenerId EventBus::subscribe(IEventListener *listener, EventFilter filter) {
         if (!listener) {
             return 0;
         }
@@ -87,21 +77,14 @@ namespace isic {
 
         if (m_listeners.size() >= MAX_LISTENERS) {
             xSemaphoreGive(m_listenersMutex);
-            LOG_ERROR(EVENT_TAG, "Max listeners reached (%zu)", MAX_LISTENERS);
+            LOG_ERROR(EVENT_TAG, "Max listeners reached (%u)", unsigned{MAX_LISTENERS});
             return 0;
         }
 
-        const auto id = m_nextId++;
+        const auto id{m_nextId++};
         m_listeners.push_back(Subscriber{id, listener, filter});
-
-        if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-            m_metrics.listenerCount = m_listeners.size();
-            xSemaphoreGive(m_metricsMutex);
-        }
-
         xSemaphoreGive(m_listenersMutex);
-
-        LOG_DEBUG(EVENT_TAG, "Subscribed listener id=%u, total=%zu", id, m_listeners.size());
+        LOG_DEBUG(EVENT_TAG, "Subscribed listener id=%u, total=%u", unsigned{id}, unsigned{m_listeners.size()});
         return id;
     }
 
@@ -111,23 +94,16 @@ namespace isic {
             return;
         }
 
-        const auto sizeBefore = m_listeners.size();
-        std::erase_if(m_listeners, [id](const Subscriber& s) { return s.id == id; });
-
-        if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-            m_metrics.listenerCount = m_listeners.size();
-            xSemaphoreGive(m_metricsMutex);
-        }
-
+        const auto sizeBefore{m_listeners.size()};
+        std::erase_if(m_listeners, [id](const Subscriber &s) { return s.id == id; });
         xSemaphoreGive(m_listenersMutex);
 
         if (m_listeners.size() < sizeBefore) {
-            LOG_DEBUG(EVENT_TAG, "Unsubscribed listener id=%u, remaining=%zu",
-                     id, m_listeners.size());
+            LOG_DEBUG(EVENT_TAG, "Unsubscribed listener id=%u, remaining=%u", unsigned{id}, unsigned{m_listeners.size()});
         }
     }
 
-    bool EventBus::publish(const Event& event, const TickType_t ticksToWait) {
+    bool EventBus::publish(const Event &event, const TickType_t ticksToWait) {
         if (!m_queue) {
             return false;
         }
@@ -138,65 +114,29 @@ namespace isic {
         }
 
         if (xQueueSend(m_queue, &event, ticksToWait) != pdPASS) {
-            if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-                m_metrics.eventsDropped++;
-                xSemaphoreGive(m_metricsMutex);
-            }
-            LOG_WARNING(EVENT_TAG, "Event queue full, dropping event type=%u",
-                       static_cast<std::uint8_t>(event.type));
+            LOG_WARNING(EVENT_TAG, "Event queue full, dropping event type=%u", static_cast<unsigned>(event.type));
             return false;
-        }
-
-        if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-            m_metrics.eventsPublished++;
-            m_metrics.currentQueueSize = uxQueueMessagesWaiting(m_queue);
-            if (m_metrics.currentQueueSize > m_metrics.peakQueueSize) {
-                m_metrics.peakQueueSize = m_metrics.currentQueueSize;
-            }
-            xSemaphoreGive(m_metricsMutex);
         }
 
         return true;
     }
 
-    bool EventBus::publishHighPriority(const Event& event, TickType_t ticksToWait) {
+    bool EventBus::publishHighPriority(const Event &event, const TickType_t ticksToWait) {
         if (!m_highPriorityQueue) {
             // Fall back to normal queue
             return publish(event, ticksToWait);
         }
 
         if (xQueueSendToFront(m_highPriorityQueue, &event, ticksToWait) != pdPASS) {
-            if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-                m_metrics.eventsDropped++;
-                xSemaphoreGive(m_metricsMutex);
-            }
-            LOG_WARNING(EVENT_TAG, "High priority queue full, type=%u",
-                       static_cast<std::uint8_t>(event.type));
+            LOG_WARNING(EVENT_TAG, "High priority queue full, type=%u", static_cast<unsigned>(event.type));
             return false;
-        }
-
-        if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-            m_metrics.eventsPublished++;
-            xSemaphoreGive(m_metricsMutex);
         }
 
         return true;
     }
 
-    EventBus::Metrics EventBus::getMetrics() const {
-        Metrics result{};
-        if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            result = m_metrics;
-            if (m_queue) {
-                result.currentQueueSize = uxQueueMessagesWaiting(m_queue);
-            }
-            xSemaphoreGive(m_metricsMutex);
-        }
-        return result;
-    }
-
-    void EventBus::eventTaskThunk(void* arg) {
-        static_cast<EventBus*>(arg)->eventTask();
+    void EventBus::eventTaskThunk(void *arg) {
+        static_cast<EventBus *>(arg)->eventTask();
     }
 
     void EventBus::eventTask() {
@@ -206,7 +146,7 @@ namespace isic {
 
         while (m_running) {
             // First check high-priority queue (non-blocking)
-            bool hasEvent = false;
+            bool hasEvent{false};
 
             if (m_highPriorityQueue) {
                 hasEvent = (xQueueReceive(m_highPriorityQueue, &event, 0) == pdTRUE);
@@ -217,6 +157,7 @@ namespace isic {
                 hasEvent = (xQueueReceive(m_queue, &event, pdMS_TO_TICKS(50)) == pdTRUE);
             }
 
+            // Dispatch event if received one
             if (hasEvent) {
                 dispatchEvent(event);
             }
@@ -226,32 +167,25 @@ namespace isic {
         vTaskDelete(nullptr);
     }
 
-    bool EventBus::dispatchEvent(const Event& event) {
+    bool EventBus::dispatchEvent(const Event &event) {
         // Make a copy of listeners to avoid holding mutex during callbacks
         if (xSemaphoreTake(m_listenersMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
             LOG_WARNING(EVENT_TAG, "Could not acquire mutex for dispatch");
             return false;
         }
 
-        auto listenersCopy = m_listeners;
+        auto listenersCopy{m_listeners};
         xSemaphoreGive(m_listenersMutex);
 
-        std::uint32_t delivered = 0;
+        std::size_t delivered{0};
 
-        for (const auto& [id, listener, filter] : listenersCopy) {
+        for (const auto &[id, listener, filter]: listenersCopy) {
             if (listener && filter.accepts(event.type)) {
                 listener->onEvent(event);
                 ++delivered;
             }
         }
 
-        if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-            m_metrics.eventsDelivered += delivered;
-            m_metrics.currentQueueSize = uxQueueMessagesWaiting(m_queue);
-            xSemaphoreGive(m_metricsMutex);
-        }
-
         return delivered > 0;
     }
-
-}  // namespace isic
+}

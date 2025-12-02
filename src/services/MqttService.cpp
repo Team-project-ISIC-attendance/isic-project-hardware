@@ -5,52 +5,53 @@
 #include <ArduinoJson.h>
 
 namespace isic {
-
     namespace {
-        constexpr auto* MQTT_TAG = "MqttService";
-        constexpr auto* MQTT_TASK_NAME = "mqtt_loop";
-        constexpr std::uint32_t MQTT_TASK_LOOP_MS = 50;
+        constexpr auto *MQTT_TAG{"MqttService"};
+        constexpr auto *MQTT_TASK_NAME{"mqtt_loop"};
+        constexpr std::uint32_t MQTT_TASK_LOOP_MS{50};
 
-        constexpr std::uint8_t WIFI_CONNECT_RETRIES = 20;
-        constexpr std::uint32_t WIFI_CONNECT_DELAY_MS = 500;
+        constexpr std::uint8_t WIFI_CONNECT_RETRIES{20};
+        constexpr std::uint32_t WIFI_CONNECT_DELAY_MS{500};
 
-        constexpr std::size_t DEFAULT_QUEUE_SIZE = 64;
-        constexpr std::uint32_t MAX_BACKOFF_MS = 60000;
+        constexpr std::size_t DEFAULT_QUEUE_SIZE{64};
+        constexpr std::uint32_t MAX_BACKOFF_MS{60000};
     }
 
-    MqttService::MqttService(EventBus& bus) : m_bus(bus), m_client(m_wifiClient) {
+    MqttService::MqttService(EventBus &bus) : m_bus(bus), m_client(m_wifiClient) {
         m_metricsMutex = xSemaphoreCreateMutex();
         m_subscriptionId = m_bus.subscribe(this,
-            EventFilter::only(EventType::ConfigUpdated)
+        EventFilter::only(EventType::ConfigUpdated)
                 .include(EventType::AttendanceRecorded)
                 .include(EventType::OtaStateChanged)
                 .include(EventType::OtaProgress)
                 .include(EventType::HealthStatusChanged)
-                .include(EventType::MqttMessageReceived));
+                .include(EventType::MqttMessageReceived)
+        );
     }
 
     MqttService::~MqttService() {
         stop();
+
         if (m_outboundQueue) {
             vQueueDelete(m_outboundQueue);
             m_outboundQueue = nullptr;
         }
+
         if (m_metricsMutex) {
             vSemaphoreDelete(m_metricsMutex);
             m_metricsMutex = nullptr;
         }
+
         m_bus.unsubscribe(m_subscriptionId);
     }
 
-    Status MqttService::begin(const AppConfig& cfg, PowerService& powerService) {
+    Status MqttService::begin(const AppConfig &cfg, PowerService &powerService) {
         m_cfg = &cfg;
         m_mqttCfg = &cfg.mqtt;
         m_powerService = &powerService;
 
         // Create outbound queue
-        const auto queueSize = m_mqttCfg->outboundQueueSize > 0
-            ? m_mqttCfg->outboundQueueSize
-            : DEFAULT_QUEUE_SIZE;
+        const auto queueSize{m_mqttCfg->outboundQueueSize > 0 ? m_mqttCfg->outboundQueueSize : DEFAULT_QUEUE_SIZE};
 
         m_outboundQueue = xQueueCreate(queueSize, sizeof(MqttOutboundMessage));
         if (!m_outboundQueue) {
@@ -59,7 +60,7 @@ namespace isic {
         }
 
         // Set MQTT callback
-        m_client.setCallback([this](char* topic, std::uint8_t* payload, unsigned int length) {
+        m_client.setCallback([this](char *topic, std::uint8_t *payload, unsigned int length) {
             this->onMqttMessage(topic, payload, length);
         });
 
@@ -78,9 +79,7 @@ namespace isic {
             m_mqttCfg->taskCore
         );
 
-        LOG_INFO(MQTT_TAG, "MqttService started, broker=%s:%u, queue=%zu",
-                 m_mqttCfg->broker.c_str(), m_mqttCfg->port, queueSize);
-
+        LOG_INFO(MQTT_TAG, "MqttService started, broker=%s:%u, queue=%u", m_mqttCfg->broker.c_str(), unsigned{m_mqttCfg->port}, unsigned{queueSize});
         return Status::OK();
     }
 
@@ -104,20 +103,18 @@ namespace isic {
         LOG_INFO(MQTT_TAG, "MqttService stopped");
     }
 
-    bool MqttService::publishAsync(const std::string& topic,
-                                    const std::string& payload,
-                                    bool retained,
-                                    std::uint8_t qos) {
+    bool MqttService::publishAsync(const std::string &topic, const std::string &payload, const bool retained, const std::uint8_t qos) {
         if (!m_outboundQueue) {
             return false;
         }
 
-        MqttOutboundMessage msg{};
-        msg.topic = topic;
-        msg.payload = payload;
-        msg.retained = retained;
-        msg.qos = qos;
-        msg.enqueuedMs = millis();
+        MqttOutboundMessage msg{
+            .topic = topic,
+            .payload = payload,
+            .retained = retained,
+            .qos = qos,
+            .enqueuedMs = millis()
+        };
 
         // Non-blocking enqueue
         if (xQueueSend(m_outboundQueue, &msg, 0) != pdTRUE) {
@@ -136,7 +133,7 @@ namespace isic {
                     },
                     .timestampMs = static_cast<std::uint64_t>(millis())
                 };
-                (void)m_bus.publish(evt);
+                (void) m_bus.publish(evt); // TODO: handle publish failure?
 
                 return false;
             } else if (m_mqttCfg->queueFullPolicy == MqttConfig::QueueFullPolicy::DropOldest) {
@@ -167,7 +164,7 @@ namespace isic {
         return true;
     }
 
-    bool MqttService::publishSync(const std::string& topic, const std::string& payload) {
+    bool MqttService::publishSync(const std::string &topic, const std::string &payload) {
         if (!m_client.connected()) {
             return false;
         }
@@ -184,14 +181,18 @@ namespace isic {
     }
 
     std::size_t MqttService::getQueueSize() const {
-        if (!m_outboundQueue) return 0;
+        if (!m_outboundQueue) {
+            return 0;
+        }
+
         return uxQueueMessagesWaiting(m_outboundQueue);
     }
 
     HealthStatus MqttService::getHealth() const {
-        HealthStatus status{};
-        status.componentName = getComponentName();
-        status.lastUpdatedMs = millis();
+        HealthStatus status{
+            .componentName = getComponentName(),
+            .lastUpdatedMs = millis(),
+        };
 
         if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             status.errorCount = m_metrics.messagesFailed + m_metrics.connectFailures;
@@ -221,10 +222,10 @@ namespace isic {
         return m_connected.load();
     }
 
-    void MqttService::onEvent(const Event& event) {
+    void MqttService::onEvent(const Event &event) {
         switch (event.type) {
             case EventType::ConfigUpdated: {
-                if (const auto* ce = std::get_if<ConfigUpdatedEvent>(&event.payload)) {
+                if (const auto *ce = std::get_if<ConfigUpdatedEvent>(&event.payload)) {
                     if (ce->config) {
                         m_cfg = ce->config;
                         m_mqttCfg = &ce->config->mqtt;
@@ -234,25 +235,25 @@ namespace isic {
                 break;
             }
             case EventType::AttendanceRecorded: {
-                if (const auto* rec = std::get_if<AttendanceRecord>(&event.payload)) {
+                if (const auto *rec = std::get_if<AttendanceRecord>(&event.payload)) {
                     handleAttendanceEvent(*rec);
                 }
                 break;
             }
             case EventType::OtaStateChanged: {
-                if (const auto* ota = std::get_if<OtaStateChangedEvent>(&event.payload)) {
+                if (const auto *ota = std::get_if<OtaStateChangedEvent>(&event.payload)) {
                     handleOtaStateChanged(*ota);
                 }
                 break;
             }
             case EventType::OtaProgress: {
-                if (const auto* prog = std::get_if<OtaProgressEvent>(&event.payload)) {
+                if (const auto *prog = std::get_if<OtaProgressEvent>(&event.payload)) {
                     handleOtaProgress(*prog);
                 }
                 break;
             }
             case EventType::MqttMessageReceived: {
-                if (const auto* msg = std::get_if<MqttMessageEvent>(&event.payload)) {
+                if (const auto *msg = std::get_if<MqttMessageEvent>(&event.payload)) {
                     if (msg->topic == "health/report") {
                         handleHealthReport(msg->payload);
                     }
@@ -264,8 +265,8 @@ namespace isic {
         }
     }
 
-    void MqttService::mqttTaskThunk(void* arg) {
-        static_cast<MqttService*>(arg)->mqttTask();
+    void MqttService::mqttTaskThunk(void *arg) {
+        static_cast<MqttService *>(arg)->mqttTask();
     }
 
     void MqttService::mqttTask() {
@@ -277,17 +278,14 @@ namespace isic {
             if (!m_client.connected()) {
                 handleDisconnect();
 
-                const auto now = millis();
-                const auto backoff = calculateBackoff();
-
-                if (now - m_lastReconnectAttempt >= backoff) {
+                const auto now{millis()};
+                if (const auto backoff{calculateBackoff()}; now - m_lastReconnectAttempt >= backoff) {
                     m_lastReconnectAttempt = now;
                     connectMqtt();
                 }
             } else {
                 m_client.loop();
                 processOutboundQueue();
-
                 m_consecutiveFailures = 0;
 
                 if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -311,7 +309,9 @@ namespace isic {
 
         m_wifiConnected.store(false);
 
-        if (!m_cfg) return;
+        if (!m_cfg) {
+            return;
+        }
 
         LOG_INFO(MQTT_TAG, "Connecting WiFi to SSID: %s", m_cfg->wifi.ssid.c_str());
 
@@ -319,7 +319,7 @@ namespace isic {
             m_wakeLock = m_powerService->requestWakeLock("mqtt_connect");
         }
 
-        WiFi.mode(WIFI_STA);
+        WiFiClass::mode(WIFI_STA); // Set WiFi to station mode
         WiFi.begin(m_cfg->wifi.ssid.c_str(), m_cfg->wifi.password.c_str());
 
         for (std::uint8_t i = 0; i < WIFI_CONNECT_RETRIES; ++i) {
@@ -338,7 +338,9 @@ namespace isic {
     }
 
     void MqttService::connectMqtt() {
-        if (!m_cfg || !m_mqttCfg) return;
+        if (!m_cfg || !m_mqttCfg) {
+            return;
+        }
 
         if (m_powerService && !m_wakeLock.isValid()) {
             m_wakeLock = m_powerService->requestWakeLock("mqtt_connect");
@@ -349,19 +351,14 @@ namespace isic {
             xSemaphoreGive(m_metricsMutex);
         }
 
-        LOG_INFO(MQTT_TAG, "Connecting to MQTT %s:%u",
-                 m_mqttCfg->broker.c_str(), m_mqttCfg->port);
-
+        LOG_INFO(MQTT_TAG, "Connecting to MQTT %s:%u", m_mqttCfg->broker.c_str(), unsigned{m_mqttCfg->port});
         m_client.setServer(m_mqttCfg->broker.c_str(), m_mqttCfg->port);
 
-        const auto clientId = String(m_cfg->device.deviceId.c_str());
-        bool connected = false;
+        const auto clientId{String(m_cfg->device.deviceId.c_str())};
+        auto connected{false};
 
         if (!m_mqttCfg->username.empty()) {
-            connected = m_client.connect(
-                clientId.c_str(),
-                m_mqttCfg->username.c_str(),
-                m_mqttCfg->password.c_str()
+            connected = m_client.connect(clientId.c_str(), m_mqttCfg->username.c_str(), m_mqttCfg->password.c_str()
             );
         } else {
             connected = m_client.connect(clientId.c_str());
@@ -375,8 +372,7 @@ namespace isic {
                 xSemaphoreGive(m_metricsMutex);
             }
 
-            LOG_WARNING(MQTT_TAG, "MQTT connect failed, rc=%d, failures=%u",
-                       m_client.state(), m_consecutiveFailures);
+            LOG_WARNING(MQTT_TAG, "MQTT connect failed, rc=%d, failures=%u", m_client.state(), unsigned{m_consecutiveFailures});
             return;
         }
 
@@ -405,7 +401,7 @@ namespace isic {
             .payload = std::monostate{},
             .timestampMs = static_cast<std::uint64_t>(millis())
         };
-        (void)m_bus.publish(evt, pdMS_TO_TICKS(100));
+        (void) m_bus.publish(evt, pdMS_TO_TICKS(100)); // TODO: handle publish failure?
 
         if (m_wakeLock.isValid() && m_powerService) {
             m_powerService->releaseWakeLock(m_wakeLock);
@@ -413,9 +409,7 @@ namespace isic {
     }
 
     void MqttService::handleDisconnect() {
-        const bool wasConnected = m_connected.exchange(false);
-
-        if (wasConnected) {
+        if (const bool wasConnected{m_connected.exchange(false)}; wasConnected) {
             if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 m_metrics.isConnected = false;
                 m_metrics.lastDisconnectedMs = millis();
@@ -430,34 +424,32 @@ namespace isic {
                 .payload = std::monostate{},
                 .timestampMs = static_cast<std::uint64_t>(millis())
             };
-            (void)m_bus.publish(evt, pdMS_TO_TICKS(100));
+            (void) m_bus.publish(evt, pdMS_TO_TICKS(100)); // TODO: handle publish failure?
         }
     }
 
     std::uint32_t MqttService::calculateBackoff() const {
-        if (!m_mqttCfg) return 5000;
+        if (!m_mqttCfg) {
+            return 5000;
+        }
 
-        const auto minBackoff = m_mqttCfg->reconnectBackoffMinMs;
-        const auto maxBackoff = m_mqttCfg->reconnectBackoffMaxMs;
-        const auto multiplier = m_mqttCfg->reconnectBackoffMultiplier;
+        const auto minBackoff{m_mqttCfg->reconnectBackoffMinMs};
+        const auto maxBackoff{m_mqttCfg->reconnectBackoffMaxMs};
+        const auto multiplier{ m_mqttCfg->reconnectBackoffMultiplier};
 
-        auto backoff = static_cast<std::uint32_t>(
-            minBackoff * std::pow(multiplier, m_consecutiveFailures)
-        );
+        auto backoff{static_cast<std::uint32_t>(minBackoff * std::pow(multiplier, m_consecutiveFailures))};
 
         if (backoff > maxBackoff) {
             backoff = maxBackoff;
         }
 
-        const auto jitter = (random(0, 20) - 10) * backoff / 100;
-        backoff += jitter;
-
-        return backoff;
+        const auto jitter{(random(0, 20) - 10) * backoff / 100};
+        return backoff + jitter;
     }
 
-    void MqttService::onMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
+    void MqttService::onMqttMessage(char *topic, uint8_t *payload, unsigned int length) {
         const std::string t{topic};
-        const std::string p{reinterpret_cast<char*>(payload), length};
+        const std::string p{reinterpret_cast<char *>(payload), length};
 
         LOG_INFO(MQTT_TAG, "Message on %s: %s", t.c_str(), p.c_str());
 
@@ -472,7 +464,7 @@ namespace isic {
                 .payload = MqttMessageEvent{t, p},
                 .timestampMs = static_cast<std::uint64_t>(millis())
             };
-            (void)m_bus.publish(evt, pdMS_TO_TICKS(100));
+            (void) m_bus.publish(evt, pdMS_TO_TICKS(100)); // TODO: handle publish failure?
         } else if (t == topicOtaSet()) {
             // Forward OTA command to OtaModule via MqttMessageReceived event
             // OtaModule handles full JSON parsing with action, url, version, sha256, etc.
@@ -484,7 +476,7 @@ namespace isic {
                 .timestampMs = static_cast<std::uint64_t>(millis()),
                 .priority = EventPriority::E_HIGH
             };
-            (void)m_bus.publish(evt, pdMS_TO_TICKS(100));
+            (void) m_bus.publish(evt, pdMS_TO_TICKS(100));  // TODO: handle publish failure?
         }
     }
 
@@ -493,7 +485,7 @@ namespace isic {
             return;
         }
 
-        for (int i = 0; i < 10; ++i) {
+        for (std::uint8_t i = 0; i < 10; ++i) {
             MqttOutboundMessage msg{};
             if (xQueueReceive(m_outboundQueue, &msg, 0) != pdTRUE) {
                 break;
@@ -501,9 +493,8 @@ namespace isic {
 
             if (!sendMessage(msg)) {
                 if (m_client.connected()) {
-                    const auto age = millis() - msg.enqueuedMs;
-                    if (age < 30000) {
-                        (void)xQueueSendToFront(m_outboundQueue, &msg, 0);
+                    if ( const auto age = millis() - msg.enqueuedMs; age < 30000) {
+                        (void) xQueueSendToFront(m_outboundQueue, &msg, 0); // TODO: handle failure?
                     } else {
                         if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                             m_metrics.messagesDropped++;
@@ -520,8 +511,8 @@ namespace isic {
         }
     }
 
-    bool MqttService::sendMessage(const MqttOutboundMessage& msg) {
-        const bool success = m_client.publish(msg.topic.c_str(), msg.payload.c_str(), msg.retained);
+    bool MqttService::sendMessage(const MqttOutboundMessage &msg) {
+        const bool success{m_client.publish(msg.topic.c_str(), msg.payload.c_str(), msg.retained)};
 
         if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
             if (success) {
@@ -537,64 +528,92 @@ namespace isic {
     }
 
     std::string MqttService::makeBaseTopic() const {
-        if (!m_cfg) return "device/unknown";
+        if (!m_cfg) {
+            return "device/unknown";
+        }
         return m_mqttCfg->baseTopic + "/" + m_cfg->device.deviceId;
     }
 
-    std::string MqttService::topicConfigSet() const { return makeBaseTopic() + "/config/set"; }
-    std::string MqttService::topicConfigStatus() const { return makeBaseTopic() + "/config/status"; }
-    std::string MqttService::topicOtaSet() const { return makeBaseTopic() + "/ota/set"; }
-    std::string MqttService::topicOtaStatus() const { return makeBaseTopic() + "/ota/status"; }
-    std::string MqttService::topicOtaProgress() const { return makeBaseTopic() + "/ota/progress"; }
-    std::string MqttService::topicOtaError() const { return makeBaseTopic() + "/ota/error"; }
-    std::string MqttService::topicAttendance() const { return makeBaseTopic() + "/attendance"; }
-    std::string MqttService::topicAttendanceBatch() const { return makeBaseTopic() + "/attendance/batch"; }
-    std::string MqttService::topicStatus() const { return makeBaseTopic() + "/status"; }
-    std::string MqttService::topicHealth() const { return makeBaseTopic() + "/status/health"; }
-    std::string MqttService::topicPn532Status() const { return makeBaseTopic() + "/status/pn532"; }
-    std::string MqttService::topicMetrics() const { return makeBaseTopic() + "/metrics"; }
-    std::string MqttService::topicModules() const { return makeBaseTopic() + "/modules"; }
+    std::string MqttService::topicConfigSet() const {
+        return makeBaseTopic() + "/config/set";
+    }
+    std::string MqttService::topicConfigStatus() const {
+        return makeBaseTopic() + "/config/status";
+    }
+    std::string MqttService::topicOtaSet() const {
+        return makeBaseTopic() + "/ota/set";
+    }
+    std::string MqttService::topicOtaStatus() const {
+        return makeBaseTopic() + "/ota/status";
+    }
+    std::string MqttService::topicOtaProgress() const {
+        return makeBaseTopic() + "/ota/progress";
+    }
+    std::string MqttService::topicOtaError() const {
+        return makeBaseTopic() + "/ota/error";
+    }
+    std::string MqttService::topicAttendance() const {
+        return makeBaseTopic() + "/attendance";
+    }
+    std::string MqttService::topicAttendanceBatch() const {
+        return makeBaseTopic() + "/attendance/batch";
+    }
+    std::string MqttService::topicStatus() const {
+        return makeBaseTopic() + "/status";
+    }
+    std::string MqttService::topicHealth() const {
+        return makeBaseTopic() + "/status/health";
+    }
+    std::string MqttService::topicPn532Status() const {
+        return makeBaseTopic() + "/status/pn532";
+    }
+    std::string MqttService::topicMetrics() const {
+        return makeBaseTopic() + "/metrics";
+    }
+    std::string MqttService::topicModules() const {
+        return makeBaseTopic() + "/modules";
+    }
 
-    void MqttService::publishStatus(const char* status) {
-        JsonDocument doc;
+    void MqttService::publishStatus(const char *status) {
+        JsonDocument doc{};
         doc["status"] = status;
         doc["ip"] = WiFi.localIP().toString();
         doc["device_id"] = m_cfg ? m_cfg->device.deviceId : "unknown";
         doc["firmware"] = m_cfg ? m_cfg->device.firmwareVersion : "unknown";
         doc["uptime_s"] = millis() / 1000;
 
-        std::string payload;
+        std::string payload{};
         serializeJson(doc, payload);
 
-        (void)publishAsync(topicStatus(), payload, true);
+        (void) publishAsync(topicStatus(), payload, true); // TODO: handle failure?
     }
 
-    void MqttService::publishHealth(const std::string& healthJson) {
-        (void)publishAsync(topicHealth(), healthJson);
+    void MqttService::publishHealth(const std::string &healthJson) {
+        (void) publishAsync(topicHealth(), healthJson); // TODO: handle failure?
     }
 
-    void MqttService::handleAttendanceEvent(const AttendanceRecord& record) {
+    void MqttService::handleAttendanceEvent(const AttendanceRecord &record) {
         char cardStr[CARD_ID_SIZE * 2 + 1];
-        std::size_t pos = 0;
-        for (const auto byte : record.cardId) {
+        std::uint32_t pos = 0;
+        for (const auto byte: record.cardId) {
             pos += snprintf(cardStr + pos, sizeof(cardStr) - pos, "%02X", byte);
         }
 
-        JsonDocument doc;
+        JsonDocument doc{};
         doc["card_id"] = cardStr;
         doc["timestamp_ms"] = record.timestampMs;
         doc["device_id"] = record.deviceId;
         doc["location_id"] = record.locationId;
         doc["sequence"] = record.sequenceNumber;
 
-        std::string payload;
+        std::string payload{};
         serializeJson(doc, payload);
 
-        (void)publishAsync(topicAttendance(), payload);
+        (void) publishAsync(topicAttendance(), payload); // TODO: handle failure?
     }
 
-    void MqttService::handleOtaStateChanged(const OtaStateChangedEvent& event) {
-        JsonDocument doc;
+    void MqttService::handleOtaStateChanged(const OtaStateChangedEvent &event) {
+        JsonDocument doc{};
 
         // State info
         doc["old_state"] = toString(static_cast<OtaState>(event.oldState));
@@ -608,30 +627,29 @@ namespace isic {
             doc["firmware_version"] = m_cfg->device.firmwareVersion;
         }
 
-        std::string payload;
+        std::string payload{};
         serializeJson(doc, payload);
 
         // Publish to status topic (retained so new subscribers get current state)
-        (void)publishAsync(topicOtaStatus(), payload, true);
+        (void) publishAsync(topicOtaStatus(), payload, true); // TODO: handle failure?
 
         // Also publish to error topic if state is Failed
-        const auto newState = static_cast<OtaState>(event.newState);
-        if (newState == OtaState::Failed) {
-            JsonDocument errorDoc;
+        if (const auto newState = static_cast<OtaState>(event.newState); newState == OtaState::Failed) {
+            JsonDocument errorDoc{};
             errorDoc["error"] = event.message;
             errorDoc["timestamp_ms"] = event.timestampMs;
             if (m_cfg) {
                 errorDoc["device_id"] = m_cfg->device.deviceId;
             }
 
-            std::string errorPayload;
+            std::string errorPayload{};
             serializeJson(errorDoc, errorPayload);
-            (void)publishAsync(topicOtaError(), errorPayload);
+            (void) publishAsync(topicOtaError(), errorPayload); // TODO: handle failure?
         }
     }
 
-    void MqttService::handleOtaProgress(const OtaProgressEvent& event) {
-        JsonDocument doc;
+    void MqttService::handleOtaProgress(const OtaProgressEvent &event) {
+        JsonDocument doc{};
         doc["percent"] = event.percent;
         doc["bytes_downloaded"] = event.bytesDownloaded;
         doc["total_bytes"] = event.totalBytes;
@@ -648,14 +666,13 @@ namespace isic {
             doc["device_id"] = m_cfg->device.deviceId;
         }
 
-        std::string payload;
+        std::string payload{};
         serializeJson(doc, payload);
 
-        (void)publishAsync(topicOtaProgress(), payload);
+        (void) publishAsync(topicOtaProgress(), payload); // TODO: handle failure?
     }
 
-    void MqttService::handleHealthReport(const std::string& payload) {
-        (void)publishAsync(topicHealth(), payload);
+    void MqttService::handleHealthReport(const std::string &payload) {
+        (void) publishAsync(topicHealth(), payload); // TODO: handle failure?
     }
-
-}  // namespace isic
+}

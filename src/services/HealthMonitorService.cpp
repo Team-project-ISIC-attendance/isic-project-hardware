@@ -5,17 +5,16 @@
 #include <esp_heap_caps.h>
 
 namespace isic {
-
     namespace {
-        constexpr auto* HEALTH_TAG = "HealthMonitor";
-        constexpr auto* HEALTH_TASK_NAME = "health_mon";
-        constexpr std::uint32_t HEALTH_TASK_STACK_SIZE = 4096;
-        constexpr std::uint8_t HEALTH_TASK_PRIORITY = 1;
-        constexpr std::uint8_t HEALTH_TASK_CORE = 0;
-        constexpr std::size_t MAX_COMPONENTS = 16;
+        constexpr auto *HEALTH_TAG{"HealthMonitor"};
+        constexpr auto *HEALTH_TASK_NAME{"health_monitor"};
+        constexpr std::uint32_t HEALTH_TASK_STACK_SIZE{4096};
+        constexpr std::uint8_t HEALTH_TASK_PRIORITY{1};
+        constexpr std::uint8_t HEALTH_TASK_CORE{0};
+        constexpr std::size_t MAX_COMPONENTS{16};
     }
 
-    HealthMonitorService::HealthMonitorService(EventBus& bus) : m_bus(bus) {
+    HealthMonitorService::HealthMonitorService(EventBus &bus) : m_bus(bus) {
         m_componentsMutex = xSemaphoreCreateMutex();
         m_components.reserve(MAX_COMPONENTS);
         m_subscriptionId = m_bus.subscribe(this);
@@ -30,7 +29,7 @@ namespace isic {
         m_bus.unsubscribe(m_subscriptionId);
     }
 
-    Status HealthMonitorService::begin(const AppConfig& cfg) {
+    Status HealthMonitorService::begin(const AppConfig &cfg) {
         m_cfg = &cfg.health;
         m_appCfg = &cfg;
         m_startTimeMs = millis();
@@ -52,9 +51,7 @@ namespace isic {
             HEALTH_TASK_CORE
         );
 
-        LOG_INFO(HEALTH_TAG, "HealthMonitorService started, check interval=%ums",
-                 m_cfg->checkIntervalMs);
-
+        LOG_INFO(HEALTH_TAG, "HealthMonitorService started, check interval=%ums", unsigned{m_cfg->checkIntervalMs});
         return Status::OK();
     }
 
@@ -66,7 +63,7 @@ namespace isic {
         }
     }
 
-    void HealthMonitorService::registerComponent(IHealthCheck* component) {
+    void HealthMonitorService::registerComponent(IHealthCheck *component) {
         if (!component) return;
 
         if (xSemaphoreTake(m_componentsMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
@@ -75,39 +72,40 @@ namespace isic {
         }
 
         // Check if already registered
-        for (const auto& entry : m_components) {
+        for (const auto &entry: m_components) {
             if (entry.component == component) {
                 xSemaphoreGive(m_componentsMutex);
-                LOG_WARNING(HEALTH_TAG, "Component already registered: %.*s",
-                           static_cast<int>(component->getComponentName().size()),
-                           component->getComponentName().data());
+                LOG_WARNING(HEALTH_TAG, "Component already registered: %.*s", unsigned{component->getComponentName().size()}, component->getComponentName().data());
                 return;
             }
         }
 
         if (m_components.size() >= MAX_COMPONENTS) {
             xSemaphoreGive(m_componentsMutex);
-            LOG_ERROR(HEALTH_TAG, "Max components reached (%zu)", MAX_COMPONENTS);
+            LOG_ERROR(HEALTH_TAG, "Max components reached (%u)", unsigned{MAX_COMPONENTS});
             return;
         }
 
-        ComponentEntry entry{};
-        entry.component = component;
-        entry.lastStatus.componentName = component->getComponentName();
-        entry.lastStatus.state = HealthState::Unknown;
-        entry.previousState = HealthState::Unknown;
-        entry.lastCheckMs = 0;
+        ComponentEntry entry {
+            .component = component,
+            .lastStatus = HealthStatus{
+                .state = HealthState::Unknown,
+                .componentName = component->getComponentName(),
+            },
+            .previousState = HealthState::Unknown,
+            .lastCheckMs = 0,
+        };
 
         m_components.push_back(entry);
         xSemaphoreGive(m_componentsMutex);
 
-        LOG_INFO(HEALTH_TAG, "Registered component: %.*s",
-                 static_cast<int>(component->getComponentName().size()),
-                 component->getComponentName().data());
+        LOG_INFO(HEALTH_TAG, "Registered component: %.*s", unsigned{component->getComponentName().size()}, component->getComponentName().data());
     }
 
-    void HealthMonitorService::unregisterComponent(IHealthCheck* component) {
-        if (!component) return;
+    void HealthMonitorService::unregisterComponent(IHealthCheck *component) {
+        if (!component) {
+            return;
+        }
 
         if (xSemaphoreTake(m_componentsMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
             LOG_ERROR(HEALTH_TAG, "Failed to acquire mutex for unregistration");
@@ -119,8 +117,7 @@ namespace isic {
                 const auto name = it->component->getComponentName();
                 m_components.erase(it);
                 xSemaphoreGive(m_componentsMutex);
-                LOG_INFO(HEALTH_TAG, "Unregistered component: %.*s",
-                         static_cast<int>(name.size()), name.data());
+                LOG_INFO(HEALTH_TAG, "Unregistered component: %.*s", unsigned{name.size()}, name.data());
                 return;
             }
         }
@@ -137,16 +134,19 @@ namespace isic {
             return HealthStatus{.state = HealthState::Unknown, .componentName = name};
         }
 
-        for (const auto& entry : m_components) {
+        for (const auto &entry: m_components) {
             if (entry.component && entry.component->getComponentName() == name) {
-                const auto status = entry.lastStatus;
+                const auto status{entry.lastStatus};
                 xSemaphoreGive(m_componentsMutex);
                 return status;
             }
         }
 
         xSemaphoreGive(m_componentsMutex);
-        return HealthStatus{.state = HealthState::Unknown, .componentName = name};
+        return HealthStatus{
+            .state = HealthState::Unknown,
+            .componentName = name
+        };
     }
 
     void HealthMonitorService::checkNow() {
@@ -163,20 +163,19 @@ namespace isic {
         if (xSemaphoreTake(m_componentsMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
             return 0;
         }
-        const auto count = m_components.size();
+        const auto count{m_components.size()};
         xSemaphoreGive(m_componentsMutex);
         return count;
     }
 
-    void HealthMonitorService::updateConfig(const HealthConfig& cfg) {
+    void HealthMonitorService::updateConfig(const HealthConfig &cfg) {
         m_cfg = &cfg;
-        LOG_INFO(HEALTH_TAG, "Config updated: checkInterval=%ums, reportInterval=%ums",
-                 m_cfg->checkIntervalMs, m_cfg->reportIntervalMs);
+        LOG_INFO(HEALTH_TAG, "Config updated: checkInterval=%ums, reportInterval=%ums", unsigned{m_cfg->checkIntervalMs}, unsigned{m_cfg->reportIntervalMs});
     }
 
-    void HealthMonitorService::onEvent(const Event& event) {
+    void HealthMonitorService::onEvent(const Event &event) {
         if (event.type == EventType::ConfigUpdated) {
-            if (const auto* ce = std::get_if<ConfigUpdatedEvent>(&event.payload)) {
+            if (const auto *ce = std::get_if<ConfigUpdatedEvent>(&event.payload)) {
                 if (ce->config) {
                     updateConfig(ce->config->health);
                 }
@@ -184,17 +183,17 @@ namespace isic {
         }
     }
 
-    void HealthMonitorService::healthTaskThunk(void* arg) {
-        static_cast<HealthMonitorService*>(arg)->healthTask();
+    void HealthMonitorService::healthTaskThunk(void *arg) {
+        static_cast<HealthMonitorService *>(arg)->healthTask();
     }
 
     void HealthMonitorService::healthTask() {
         LOG_DEBUG(HEALTH_TAG, "Health monitoring task started");
 
         while (m_running.load()) {
-            const auto now = millis();
-            const auto checkInterval = m_cfg ? m_cfg->checkIntervalMs : 10000;
-            const auto reportInterval = m_cfg ? m_cfg->reportIntervalMs : 60000;
+            const auto now{millis()};
+            const auto checkInterval{m_cfg ? m_cfg->checkIntervalMs : 10000};
+            const auto reportInterval{m_cfg ? m_cfg->reportIntervalMs : 60000};
 
             // Perform health checks
             performHealthChecks();
@@ -204,7 +203,7 @@ namespace isic {
 
             // Log to serial if enabled
             if (m_cfg && m_cfg->logToSerial) {
-                static std::uint64_t lastLogMs = 0;
+                static std::uint64_t lastLogMs{0}; // static becouse we want to retain value between iterations
                 if (now - lastLogMs >= checkInterval) {
                     logHealthStatus();
                     lastLogMs = now;
@@ -233,7 +232,7 @@ namespace isic {
 
         const auto now = millis();
 
-        for (auto& entry : m_components) {
+        for (auto &entry: m_components) {
             if (!entry.component) continue;
 
             // Perform health check
@@ -252,21 +251,36 @@ namespace isic {
             return;
         }
 
-        std::uint8_t healthy = 0, degraded = 0, unhealthy = 0, unknown = 0;
+        std::uint8_t healthy{0};
+        std::uint8_t degraded{0};
+        std::uint8_t unhealthy{0};
+        std::uint8_t unknown{0};
 
-        for (const auto& entry : m_components) {
+        for (const auto &entry: m_components) {
             switch (entry.lastStatus.state) {
-                case HealthState::Healthy:   ++healthy; break;
-                case HealthState::Degraded:  ++degraded; break;
-                case HealthState::Unhealthy: ++unhealthy; break;
-                default:                     ++unknown; break;
+                case HealthState::Healthy: {
+                    ++healthy;
+                    break;
+                }
+                case HealthState::Degraded: {
+                    ++degraded;
+                    break;
+                }
+                case HealthState::Unhealthy: {
+                    ++unhealthy;
+                    break;
+                }
+                default: {
+                    ++unknown;
+                    break;
+                }
             }
         }
 
         xSemaphoreGive(m_componentsMutex);
 
         // Determine overall state
-        HealthState overall = HealthState::Unknown;
+        auto overall{HealthState::Unknown};
         if (unhealthy > 0) {
             overall = HealthState::Unhealthy;
         } else if (degraded > 0 || unknown > 0) {
@@ -289,7 +303,7 @@ namespace isic {
             return;
         }
 
-        for (auto& entry : m_components) {
+        for (auto &entry: m_components) {
             if (entry.lastStatus.state != entry.previousState) {
                 // State changed - emit event
                 const Event evt{
@@ -303,19 +317,13 @@ namespace isic {
                     },
                     .timestampMs = static_cast<std::uint64_t>(millis())
                 };
-
                 entry.previousState = entry.lastStatus.state;
 
                 // Release mutex before publishing to avoid deadlock
                 xSemaphoreGive(m_componentsMutex);
 
-                LOG_INFO(HEALTH_TAG, "Health state changed: %.*s: %s -> %s",
-                         static_cast<int>(entry.lastStatus.componentName.size()),
-                         entry.lastStatus.componentName.data(),
-                         toString(entry.previousState),
-                         toString(entry.lastStatus.state));
-
-                (void)m_bus.publish(evt);
+                LOG_INFO(HEALTH_TAG, "Health state changed: %.*s: %s -> %s", unsigned{entry.lastStatus.componentName.size()}, entry.lastStatus.componentName.data(), toString(entry.previousState), toString(entry.lastStatus.state));
+                (void) m_bus.publish(evt); // TODO: handle publish failure?
 
                 // Re-acquire mutex to continue iteration
                 if (xSemaphoreTake(m_componentsMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
@@ -328,30 +336,24 @@ namespace isic {
     }
 
     void HealthMonitorService::logHealthStatus() const {
-        LOG_INFO(HEALTH_TAG, "Device health: %s (H:%u D:%u U:%u ?:%u) heap=%uKB uptime=%us",
-                 toString(m_deviceHealth.overallState),
-                 m_deviceHealth.healthyCount,
-                 m_deviceHealth.degradedCount,
-                 m_deviceHealth.unhealthyCount,
-                 m_deviceHealth.unknownCount,
-                 m_deviceHealth.freeHeapBytes / 1024,
-                 m_deviceHealth.uptimeSeconds);
+        LOG_INFO(HEALTH_TAG, "Device health: %s (H:%u D:%u U:%u ?:%u) heap=%uKB uptime=%us", toString(m_deviceHealth.overallState), unsigned{m_deviceHealth.healthyCount}, unsigned{m_deviceHealth.degradedCount}, unsigned{m_deviceHealth.unhealthyCount}, unsigned{m_deviceHealth.unknownCount}, unsigned{m_deviceHealth.freeHeapBytes / 1024}, unsigned{m_deviceHealth.uptimeSeconds});
     }
 
     void HealthMonitorService::publishHealthToMqtt() const {
-        const auto json = buildHealthJson();
+        const auto json{buildHealthJson()};
 
         // Publish via event - MqttService will handle actual publishing
         const Event evt{
-            .type = EventType::MqttMessageReceived,  // We'll use a dedicated topic
+            .type = EventType::MqttMessageReceived, // We'll use a dedicated topic
             .payload = MqttMessageEvent{
-                .topic = "health/report",  // Internal marker, MqttService interprets this
+                .topic = "health/report", // Internal marker, MqttService interprets this
                 .payload = json
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
         };
 
-        (void)m_bus.publish(evt);
+        (void) m_bus.publish(evt); // TODO: handle publish failure?
+        LOG_INFO(HEALTH_TAG, "Published health report to MQTT");
     }
 
     std::string HealthMonitorService::buildHealthJson() const {
@@ -364,7 +366,7 @@ namespace isic {
         doc["min_heap_kb"] = m_deviceHealth.minFreeHeapBytes / 1024;
 
         // Component counts
-        auto counts = doc["counts"].to<JsonObject>();
+        const auto counts{doc["counts"].to<JsonObject>()};
         counts["healthy"] = m_deviceHealth.healthyCount;
         counts["degraded"] = m_deviceHealth.degradedCount;
         counts["unhealthy"] = m_deviceHealth.unhealthyCount;
@@ -377,16 +379,19 @@ namespace isic {
         }
 
         // Component details
-        auto components = doc["components"].to<JsonArray>();
+        const auto components{doc["components"].to<JsonArray>()};
 
         if (xSemaphoreTake(m_componentsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            for (const auto& entry : m_components) {
-                if (!entry.component) continue;
+            for (const auto &entry: m_components) {
+                if (!entry.component) {
+                    continue;
+                }
 
-                auto comp = components.add<JsonObject>();
-                std::string nameStr(entry.lastStatus.componentName);
+                auto comp{components.add<JsonObject>()};
+                const std::string nameStr(entry.lastStatus.componentName);
                 comp["name"] = nameStr;
                 comp["state"] = toString(entry.lastStatus.state);
+
                 if (!entry.lastStatus.message.empty()) {
                     comp["message"] = entry.lastStatus.message;
                 }
@@ -407,8 +412,7 @@ namespace isic {
 
         // CPU usage would require more complex tracking
         // For now, leave at 0 or implement simple idle time tracking
+        // TODO: need to implement CPU usage tracking here
         m_deviceHealth.cpuUsagePercent = 0;
     }
-
-}  // namespace isic
-
+}

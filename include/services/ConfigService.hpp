@@ -5,7 +5,7 @@
  * @file ConfigService.hpp
  * @brief Configuration management service using NVS storage.
  *
- * Provides persistent storage and runtime updates for application
+ * @note Provides persistent storage and runtime updates for application
  * configuration via ESP32 NVS (Non-Volatile Storage).
  */
 
@@ -18,7 +18,6 @@
 #include "core/EventBus.hpp"
 
 namespace isic {
-
     /**
      * @brief Configuration management service.
      *
@@ -27,11 +26,12 @@ namespace isic {
      * - Save configuration changes to NVS
      * - Parse and apply JSON configuration updates
      * - Notify other components of configuration changes
+     *
+     * @note Uses Preferences library for NVS access.
      */
     class ConfigService : public IEventListener {
     public:
         explicit ConfigService(EventBus& bus);
-
         ~ConfigService() override = default;
 
         /**
@@ -65,7 +65,6 @@ namespace isic {
 
     private:
         Status load();
-
         void notifyUpdated() const;
 
         EventBus& m_bus;

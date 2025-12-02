@@ -4,16 +4,17 @@
 #include <algorithm>
 
 namespace isic {
-
     namespace {
-        constexpr auto* MGR_TAG = "ModuleMgr";
+        constexpr auto *MGR_TAG{"ModuleManager"};
     }
 
-    ModuleManager::ModuleManager(EventBus& bus) : m_bus(bus) {
+    ModuleManager::ModuleManager(EventBus &bus) : m_bus(bus) {
         m_modules.reserve(MAX_MODULES);
-        m_subscriptionId = m_bus.subscribe(this,
+        m_subscriptionId = m_bus.subscribe(
+            this,
             EventFilter::only(EventType::ConfigUpdated)
-                .include(EventType::MqttMessageReceived));
+            .include(EventType::MqttMessageReceived)
+        );
     }
 
     ModuleManager::~ModuleManager() {
@@ -21,39 +22,32 @@ namespace isic {
         m_bus.unsubscribe(m_subscriptionId);
     }
 
-    bool ModuleManager::addModule(IModule& module) {
+    bool ModuleManager::addModule(IModule &module) {
         if (m_modules.size() >= MAX_MODULES) {
-            LOG_ERROR(MGR_TAG, "Max modules reached (%zu)", MAX_MODULES);
+            LOG_ERROR(MGR_TAG, "Max modules reached (%u)", unsigned{MAX_MODULES});
             return false;
         }
 
-        const auto info = module.getInfo();
+        const auto info{module.getInfo()};
 
         // Check for duplicate
-        for (const auto& entry : m_modules) {
+        for (const auto &entry: m_modules) {
             if (entry.info.name == info.name) {
-                LOG_WARNING(MGR_TAG, "Module already registered: %.*s",
-                           static_cast<int>(info.name.size()), info.name.data());
+                LOG_WARNING(MGR_TAG, "Module already registered: %.*s", unsigned{info.name.size()}, info.name.data());
                 return false;
             }
         }
 
-        ModuleEntry entry{};
-        entry.module = &module;
-        entry.info = info;
-        entry.registered = true;
-
         // Set initial enabled state from module info
         module.setEnabled(info.enabledByDefault);
 
-        m_modules.push_back(entry);
+        m_modules.push_back(ModuleEntry {
+            .module = &module,
+            .info = info,
+            .registered = false,
+        });
 
-        LOG_INFO(MGR_TAG, "Registered module: %.*s v%.*s (priority=%u, enabled=%s)",
-                 static_cast<int>(info.name.size()), info.name.data(),
-                 static_cast<int>(info.version.size()), info.version.data(),
-                 info.priority,
-                 info.enabledByDefault ? "yes" : "no");
-
+        LOG_INFO(MGR_TAG, "Registered module: %.*s v%.*s (priority=%u, enabled=%s)", unsigned{info.name.size()}, info.name.data(), unsigned{info.version.size()}, info.version.data(), info.priority, info.enabledByDefault ? "yes" : "no");
         return true;
     }
 
@@ -63,17 +57,17 @@ namespace isic {
                 if (it->module && it->module->isRunning()) {
                     it->module->stop();
                 }
+
                 m_modules.erase(it);
-                LOG_INFO(MGR_TAG, "Removed module: %.*s",
-                        static_cast<int>(name.size()), name.data());
+                LOG_INFO(MGR_TAG, "Removed module: %.*s",unsigned{name.size()}, name.data());
                 return true;
             }
         }
         return false;
     }
 
-    IModule* ModuleManager::getModule(std::string_view name) {
-        for (auto& entry : m_modules) {
+    IModule *ModuleManager::getModule(std::string_view name) const {
+        for (const auto &entry: m_modules) {
             if (entry.info.name == name) {
                 return entry.module;
             }
@@ -82,69 +76,62 @@ namespace isic {
     }
 
     void ModuleManager::startAll() {
-        LOG_INFO(MGR_TAG, "Starting %zu modules...", m_modules.size());
+        LOG_INFO(MGR_TAG, "Starting %u modules...", unsigned{m_modules.size()});
 
         sortByPriority();
 
-        std::size_t started = 0;
-        for (auto& entry : m_modules) {
-            if (!entry.module) continue;
-
-            if (!entry.module->isEnabled()) {
-                LOG_DEBUG(MGR_TAG, "Skipping disabled module: %.*s",
-                         static_cast<int>(entry.info.name.size()),
-                         entry.info.name.data());
+        std::uint32_t started = 0;
+        for (auto &entry: m_modules) {
+            if (!entry.module) {
                 continue;
             }
 
-            LOG_DEBUG(MGR_TAG, "Starting module: %.*s",
-                     static_cast<int>(entry.info.name.size()),
-                     entry.info.name.data());
+            if (!entry.module->isEnabled()) {
+                LOG_DEBUG(MGR_TAG, "Skipping disabled module: %.*s", unsigned{entry.info.name.size()}, entry.info.name.data());
+                continue;
+            }
 
+            LOG_DEBUG(MGR_TAG, "Starting module: %.*s", unsigned{entry.info.name.size()}, entry.info.name.data());
             entry.module->start();
 
             if (entry.module->isRunning()) {
                 ++started;
             } else {
-                LOG_WARNING(MGR_TAG, "Module failed to start: %.*s",
-                           static_cast<int>(entry.info.name.size()),
-                           entry.info.name.data());
+                LOG_WARNING(MGR_TAG, "Module failed to start: %.*s", unsigned{entry.info.name.size()}, entry.info.name.data());
             }
         }
 
+        LOG_INFO(MGR_TAG, "Started %u/%u modules", unsigned{started}, unsigned{m_modules.size()});
         m_allStarted = true;
-        LOG_INFO(MGR_TAG, "Started %zu/%zu modules", started, m_modules.size());
     }
 
     void ModuleManager::stopAll() {
         LOG_INFO(MGR_TAG, "Stopping all modules...");
 
-        // Stop in reverse priority order
+        // Stop in reverse priority order, to respect dependencies
         sortByPriority();
 
         for (auto it = m_modules.rbegin(); it != m_modules.rend(); ++it) {
             if (it->module && it->module->isRunning()) {
-                LOG_DEBUG(MGR_TAG, "Stopping module: %.*s",
-                         static_cast<int>(it->info.name.size()),
-                         it->info.name.data());
+                LOG_DEBUG(MGR_TAG, "Stopping module: %.*s", unsigned{it->info.name.size()}, it->info.name.data());
                 it->module->stop();
             }
         }
 
-        m_allStarted = false;
         LOG_INFO(MGR_TAG, "All modules stopped");
+        m_allStarted = false;
     }
 
     bool ModuleManager::startModule(std::string_view name) {
-        auto* module = getModule(name);
+        auto *module{getModule(name)};
+
         if (!module) {
-            LOG_WARNING(MGR_TAG, "Module not found: %.*s",
-                       static_cast<int>(name.size()), name.data());
+            LOG_WARNING(MGR_TAG, "Module not found: %.*s", unsigned{name.size()}, name.data());
             return false;
         }
 
         if (module->isRunning()) {
-            return true;  // Already running
+            return true; // Already running
         }
 
         if (!module->isEnabled()) {
@@ -156,13 +143,14 @@ namespace isic {
     }
 
     bool ModuleManager::stopModule(std::string_view name) {
-        auto* module = getModule(name);
+        auto *module{getModule(name)};
+
         if (!module) {
             return false;
         }
 
         if (!module->isRunning()) {
-            return true;  // Already stopped
+            return true; // Already stopped
         }
 
         module->stop();
@@ -170,13 +158,14 @@ namespace isic {
     }
 
     bool ModuleManager::enableModule(std::string_view name) {
-        auto* module = getModule(name);
+        auto *module{getModule(name)};
+
         if (!module) {
             return false;
         }
 
         if (module->isEnabled()) {
-            return true;  // Already enabled
+            return true; // Already enabled
         }
 
         module->setEnabled(true);
@@ -187,20 +176,19 @@ namespace isic {
             module->start();
         }
 
-        LOG_INFO(MGR_TAG, "Enabled module: %.*s",
-                static_cast<int>(name.size()), name.data());
-
+        LOG_INFO(MGR_TAG, "Enabled module: %.*s", unsigned{name.size()}, name.data());
         return true;
     }
 
     bool ModuleManager::disableModule(std::string_view name) {
-        auto* module = getModule(name);
+        auto *module{getModule(name)};
+
         if (!module) {
             return false;
         }
 
         if (!module->isEnabled()) {
-            return true;  // Already disabled
+            return true; // Already disabled
         }
 
         // Stop first if running
@@ -211,9 +199,7 @@ namespace isic {
         module->setEnabled(false);
         publishModuleStateChange(name, false);
 
-        LOG_INFO(MGR_TAG, "Disabled module: %.*s",
-                static_cast<int>(name.size()), name.data());
-
+        LOG_INFO(MGR_TAG, "Disabled module: %.*s", unsigned{name.size()}, name.data());
         return true;
     }
 
@@ -221,8 +207,10 @@ namespace isic {
         ModuleManagerMetrics metrics{};
         metrics.totalModules = m_modules.size();
 
-        for (const auto& entry : m_modules) {
-            if (!entry.module) continue;
+        for (const auto &entry: m_modules) {
+            if (!entry.module) {
+                continue;
+            }
 
             if (entry.module->isRunning()) {
                 ++metrics.runningModules;
@@ -241,7 +229,7 @@ namespace isic {
     }
 
     bool ModuleManager::allRunning() const {
-        for (const auto& entry : m_modules) {
+        for (const auto &entry: m_modules) {
             if (entry.module && entry.module->isEnabled() && !entry.module->isRunning()) {
                 return false;
             }
@@ -249,15 +237,13 @@ namespace isic {
         return true;
     }
 
-    void ModuleManager::onEvent(const Event& event) {
+    void ModuleManager::onEvent(const Event &event) {
         // Handle config updates
         if (event.type == EventType::ConfigUpdated) {
-            const auto* cfgEvt = std::get_if<ConfigUpdatedEvent>(&event.payload);
-            if (cfgEvt && cfgEvt->config) {
+            if (const auto *cfgEvt{std::get_if<ConfigUpdatedEvent>(&event.payload)}; cfgEvt && cfgEvt->config) {
                 applyModuleConfig(cfgEvt->config->modules);
 
-                // Forward to all running modules
-                for (auto& entry : m_modules) {
+                for (auto &entry: m_modules) {
                     if (entry.module && entry.module->isRunning()) {
                         entry.module->handleConfigUpdate(*cfgEvt->config);
                     }
@@ -268,18 +254,16 @@ namespace isic {
 
         // Handle MQTT commands for module control
         if (event.type == EventType::MqttMessageReceived) {
-            const auto* msg = std::get_if<MqttMessageEvent>(&event.payload);
-            if (msg && msg->topic.find("/modules/") != std::string::npos) {
+            if (const auto *msg{std::get_if<MqttMessageEvent>(&event.payload)}; msg && msg->topic.find("/modules/") != std::string::npos) {
                 // Parse module control command
                 // Topic format: device/<id>/modules/<module_name>/set
                 // Payload: {"enabled": true/false}
-                // TODO: Implement MQTT module control
+                // TODO: Implement MQTT module control here
             }
             return;
         }
 
-        // Forward other events to running modules
-        for (auto& entry : m_modules) {
+        for (auto &entry: m_modules) {
             if (entry.module && entry.module->isRunning()) {
                 entry.module->handleEvent(event);
             }
@@ -288,19 +272,18 @@ namespace isic {
 
     void ModuleManager::sortByPriority() {
         std::sort(m_modules.begin(), m_modules.end(),
-            [](const ModuleEntry& a, const ModuleEntry& b) {
-                return a.info.priority > b.info.priority;
-            });
+        [](const ModuleEntry &a, const ModuleEntry &b) {
+                 return a.info.priority > b.info.priority;
+        });
     }
 
-    void ModuleManager::applyModuleConfig(const ModulesConfig& cfg) {
-        // Map config fields to module names
-        // This could be made more dynamic with a registry
+    void ModuleManager::applyModuleConfig(const ModulesConfig &cfg) {
+        for (auto &entry: m_modules) {
+            if (!entry.module) {
+                continue;
+            }
 
-        for (auto& entry : m_modules) {
-            if (!entry.module) continue;
-
-            bool shouldBeEnabled = entry.info.enabledByDefault;
+            auto shouldBeEnabled{entry.info.enabledByDefault};
 
             if (entry.info.name == "Attendance") {
                 shouldBeEnabled = cfg.attendanceEnabled;
@@ -308,7 +291,7 @@ namespace isic {
                 shouldBeEnabled = cfg.otaEnabled;
             }
 
-            const bool currentlyEnabled = entry.module->isEnabled();
+            const bool currentlyEnabled{entry.module->isEnabled()};
 
             if (shouldBeEnabled != currentlyEnabled) {
                 if (shouldBeEnabled) {
@@ -330,7 +313,6 @@ namespace isic {
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
         };
-        (void)m_bus.publish(evt);
+        (void) m_bus.publish(evt);
     }
-
-}  // namespace isic
+}

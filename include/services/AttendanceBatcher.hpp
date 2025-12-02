@@ -20,12 +20,13 @@
 #include "core/EventBus.hpp"
 #include "core/Result.hpp"
 
+// Forward declarations for dependencies
 namespace isic {
-
-    // Forward declarations
     class MqttService;
     class PowerService;
+}
 
+namespace isic {
     /**
      * @brief Metrics for attendance batching.
      */

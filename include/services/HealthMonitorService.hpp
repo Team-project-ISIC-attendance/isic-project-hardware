@@ -21,7 +21,6 @@
 #include "core/Result.hpp"
 
 namespace isic {
-
     /**
      * @brief Central health monitoring service for all system components.
      *
@@ -31,13 +30,6 @@ namespace isic {
      * - Aggregate into global device health state
      * - Publish health to MQTT and log to serial
      * - Emit HealthStatusChanged events when components change state
-     *
-     * Usage:
-     *   HealthMonitorService health(bus);
-     *   health.begin(config);
-     *   health.registerComponent(&pn532Driver);
-     *   health.registerComponent(&mqttService);
-     *   // ... health checks run automatically in background task
      */
     class HealthMonitorService : public IEventListener {
     public:

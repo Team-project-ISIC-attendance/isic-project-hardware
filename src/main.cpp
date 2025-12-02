@@ -37,7 +37,7 @@
 // Core components
 #include "AppConfig.hpp"
 #include "core/EventBus.hpp"
-#include "core/Events.hpp"
+#include "core/Types.hpp"
 #include "core/Logger.hpp"
 #include "core/ModuleManager.hpp"
 
@@ -135,13 +135,13 @@ bool initializeSystem() {
         return false;
     }
 
-    // 4. Create and initialize UserFeedbackService
-    // LOG_INFO(MAIN_TAG, "[4/12] Initializing UserFeedbackService...");
-    // g_feedbackService = new isic::UserFeedbackService(*g_eventBus);
-    // if (const auto status = g_feedbackService->begin(config); !status.ok()) {
-    //     LOG_WARNING(MAIN_TAG, "UserFeedbackService init failed: %s (continuing)", status.message);
-    //     // Non-critical - continue without feedback
-    // }
+    //4. Create and initialize UserFeedbackService
+    LOG_INFO(MAIN_TAG, "[4/12] Initializing UserFeedbackService...");
+    g_feedbackService = new isic::UserFeedbackService(*g_eventBus);
+    if (const auto status = g_feedbackService->begin(config); !status.ok()) {
+        LOG_WARNING(MAIN_TAG, "UserFeedbackService init failed: %s (continuing)", status.message);
+        // Non-critical - continue without feedback
+    }
 
     // 5. Create and initialize MqttService
     LOG_INFO(MAIN_TAG, "[5/12] Initializing MqttService...");
@@ -185,14 +185,14 @@ bool initializeSystem() {
     }
 
     // 10. Create and initialize AttendanceModule
-    // LOG_INFO(MAIN_TAG, "[10/12] Initializing AttendanceModule...");
-    // g_attendanceModule = new isic::AttendanceModule(*g_eventBus, *g_pn532Driver, *g_powerService);
-    // g_attendanceModule->setFeedbackService(g_feedbackService);
-    // g_attendanceModule->setBatcher(g_attendanceBatcher);
-    // if (const auto status = g_attendanceModule->begin(config); !status.ok()) {
-    //     LOG_ERROR(MAIN_TAG, "AttendanceModule init failed: %s", status.message);
-    //     return false;
-    // }
+    LOG_INFO(MAIN_TAG, "[10/12] Initializing AttendanceModule...");
+    g_attendanceModule = new isic::AttendanceModule(*g_eventBus, *g_pn532Driver, *g_powerService);
+    g_attendanceModule->setFeedbackService(g_feedbackService);
+    g_attendanceModule->setBatcher(g_attendanceBatcher);
+    if (const auto status = g_attendanceModule->begin(config); !status.ok()) {
+        LOG_ERROR(MAIN_TAG, "AttendanceModule init failed: %s", status.message);
+        return false;
+    }
 
     // 11. Create OtaModule
     LOG_INFO(MAIN_TAG, "[11/12] Initializing OtaModule...");
@@ -201,14 +201,14 @@ bool initializeSystem() {
     // 12. Create ModuleManager and register modules
     LOG_INFO(MAIN_TAG, "[12/12] Initializing ModuleManager...");
     g_moduleManager = new isic::ModuleManager(*g_eventBus);
-    // g_moduleManager->addModule(*g_attendanceModule);
+    g_moduleManager->addModule(*g_attendanceModule);
     g_moduleManager->addModule(*g_otaModule);
 
     // Register components with HealthMonitor
     LOG_INFO(MAIN_TAG, "Registering health check components...");
     g_healthMonitor->registerComponent(g_mqttService);
     g_healthMonitor->registerComponent(g_pn532Driver);
-    // g_healthMonitor->registerComponent(g_attendanceModule);
+    g_healthMonitor->registerComponent(g_attendanceModule);
     g_healthMonitor->registerComponent(g_otaService);
 
     // Start all modules
@@ -223,7 +223,8 @@ bool initializeSystem() {
     LOG_INFO(MAIN_TAG, "========================================");
     LOG_INFO(MAIN_TAG, "  System Initialization Complete");
     LOG_INFO(MAIN_TAG, "  Free heap: %u bytes", ESP.getFreeHeap());
-    LOG_INFO(MAIN_TAG, "  Modules: %zu running", g_moduleManager->getMetrics().runningModules);
+    LOG_INFO(MAIN_TAG, "  Modules: %u running",
+             static_cast<unsigned>(g_moduleManager->getMetrics().runningModules));
     LOG_INFO(MAIN_TAG, "========================================");
 
     return true;
@@ -305,11 +306,11 @@ void loop() {
         // Log MQTT metrics
         if (g_mqttService) {
             const auto metrics = g_mqttService->getMetrics();
-            LOG_INFO(MAIN_TAG, "MQTT: %s | Pub: %u | Fail: %u | Queue: %zu",
+            LOG_INFO(MAIN_TAG, "MQTT: %s | Pub: %u | Fail: %u | Queue: %u",
                      metrics.isConnected ? "Connected" : "Disconnected",
                      metrics.messagesPublished,
                      metrics.messagesFailed,
-                     metrics.currentQueueSize);
+                     static_cast<unsigned>(metrics.currentQueueSize));
         }
 
         // Log attendance metrics
@@ -324,21 +325,12 @@ void loop() {
         // Log batcher metrics
         if (g_attendanceBatcher) {
             const auto metrics = g_attendanceBatcher->getMetrics();
-            LOG_INFO(MAIN_TAG, "Batcher: Sent: %u | Pending: %zu | Current: %zu",
+            LOG_INFO(MAIN_TAG, "Batcher: Sent: %u | Pending: %u | Current: %u",
                      metrics.batchesSent,
-                     metrics.pendingBufferCount,
-                     metrics.currentBatchSize);
+                     static_cast<unsigned>(metrics.pendingBufferCount),
+                     static_cast<unsigned>(metrics.currentBatchSize));
         }
 
-        // Log EventBus metrics
-        if (g_eventBus) {
-            const auto metrics = g_eventBus->getMetrics();
-            LOG_INFO(MAIN_TAG, "EventBus: Pub: %u | Del: %u | Drop: %u | Listeners: %zu",
-                     metrics.eventsPublished,
-                     metrics.eventsDelivered,
-                     metrics.eventsDropped,
-                     metrics.listenerCount);
-        }
     }
 
     // Yield to other tasks

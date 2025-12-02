@@ -24,11 +24,12 @@
 #include "core/EventBus.hpp"
 #include "core/Result.hpp"
 
+// Forward declaration for dependencies
 namespace isic {
-
-    // Forward declarations
     class IHealthCheck;
+}
 
+namespace isic {
     /**
      * @brief Wake lock handle returned when acquiring a wake lock.
      *        Must be released via releaseWakeLock() when no longer needed.
@@ -37,8 +38,13 @@ namespace isic {
         std::uint32_t id{0};
         const char* name{""};
 
-        [[nodiscard]] bool isValid() const noexcept { return id != 0; }
-        void invalidate() noexcept { id = 0; }
+        [[nodiscard]] bool isValid() const noexcept {
+            return id != 0;
+        }
+
+        void invalidate() noexcept {
+            id = 0;
+        }
     };
 
     /**
@@ -58,13 +64,11 @@ namespace isic {
     class PowerService : public IEventListener {
     public:
         explicit PowerService(EventBus& bus);
-        ~PowerService() override;
-
-        // Non-copyable, non-movable
         PowerService(const PowerService&) = delete;
         PowerService& operator=(const PowerService&) = delete;
         PowerService(PowerService&&) = delete;
         PowerService& operator=(PowerService&&) = delete;
+        ~PowerService() override;
 
         /**
          * @brief Initialize the power service with configuration.
@@ -225,39 +229,24 @@ namespace isic {
     };
 
     /**
-     * @brief RAII wrapper for wake locks.
-     *        Automatically releases the lock when destroyed.
+     * @brief RAII wrapper for wake locks. Automatically releases the lock when destroyed.
      *
-     * Usage:
-     *   {
-     *       ScopedWakeLock lock(powerService, "my_operation");
-     *       // Do work that requires CPU to stay awake
-     *   } // Lock automatically released
+     * @note Non-copyable, movable. Use with caution to avoid dangling locks.
      */
     class ScopedWakeLock {
     public:
-        ScopedWakeLock(PowerService& service, const char* name)
-            : m_service(service)
-            , m_handle(service.requestWakeLock(name)) {}
-
+        ScopedWakeLock(PowerService& service, const char* name) : m_service(service), m_handle(service.requestWakeLock(name)) {}
+        ScopedWakeLock(const ScopedWakeLock&) = delete;
+        ScopedWakeLock& operator=(const ScopedWakeLock&) = delete;
+        ScopedWakeLock(ScopedWakeLock&& other) noexcept : m_service(other.m_service), m_handle(other.m_handle) {
+            other.m_handle.invalidate();
+        }
+        ScopedWakeLock& operator=(ScopedWakeLock&&) = delete;
         ~ScopedWakeLock() {
             if (m_handle.isValid()) {
                 m_service.releaseWakeLock(m_handle);
             }
         }
-
-        // Non-copyable
-        ScopedWakeLock(const ScopedWakeLock&) = delete;
-        ScopedWakeLock& operator=(const ScopedWakeLock&) = delete;
-
-        // Movable
-        ScopedWakeLock(ScopedWakeLock&& other) noexcept
-            : m_service(other.m_service)
-            , m_handle(other.m_handle) {
-            other.m_handle.invalidate();
-        }
-
-        ScopedWakeLock& operator=(ScopedWakeLock&&) = delete;
 
         [[nodiscard]] bool isValid() const noexcept { return m_handle.isValid(); }
 
@@ -265,8 +254,7 @@ namespace isic {
         PowerService& m_service;
         WakeLockHandle m_handle;
     };
-
-}  // namespace isic
+}
 
 #endif  // HARDWARE_POWERSERVICE_HPP
 
