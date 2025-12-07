@@ -506,7 +506,7 @@ namespace isic {
             cfg.wifi.maxRetries = 5;
 
             // MQTT defaults
-            cfg.mqtt.broker = "192.168.1.10";
+            cfg.mqtt.broker = "192.168.0.186";
             cfg.mqtt.port = 1883;
             cfg.mqtt.baseTopic = "device";
             cfg.mqtt.keepAliveSeconds = 60;

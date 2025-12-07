@@ -3,6 +3,7 @@
 #include "core/Logger.hpp"
 
 #include <ArduinoJson.h>
+#include <new>
 
 namespace isic {
     namespace {
@@ -33,6 +34,12 @@ namespace isic {
         stop();
 
         if (m_outboundQueue) {
+            // Drain and delete any remaining messages in the queue
+            MqttOutboundMessage *msg{nullptr};
+            while (xQueueReceive(m_outboundQueue, &msg, 0) == pdTRUE) {
+                delete msg;
+            }
+
             vQueueDelete(m_outboundQueue);
             m_outboundQueue = nullptr;
         }
@@ -53,7 +60,7 @@ namespace isic {
         // Create outbound queue
         const auto queueSize{m_mqttCfg->outboundQueueSize > 0 ? m_mqttCfg->outboundQueueSize : DEFAULT_QUEUE_SIZE};
 
-        m_outboundQueue = xQueueCreate(queueSize, sizeof(MqttOutboundMessage));
+        m_outboundQueue = xQueueCreate(queueSize, sizeof(MqttOutboundMessage*));
         if (!m_outboundQueue) {
             LOG_ERROR(MQTT_TAG, "Failed to create outbound queue");
             return Status::Error(ErrorCode::ResourceExhausted, "Queue creation failed");
@@ -108,7 +115,8 @@ namespace isic {
             return false;
         }
 
-        MqttOutboundMessage msg{
+        // Heap-allocate the message to avoid std::string corruption through FreeRTOS queue memcpy
+        auto *msg = new (std::nothrow) MqttOutboundMessage{
             .topic = topic,
             .payload = payload,
             .retained = retained,
@@ -116,9 +124,16 @@ namespace isic {
             .enqueuedMs = millis()
         };
 
-        // Non-blocking enqueue
+        if (!msg) {
+            LOG_ERROR(MQTT_TAG, "Failed to allocate outbound message");
+            return false;
+        }
+
+        // Non-blocking enqueue (queue stores pointer)
         if (xQueueSend(m_outboundQueue, &msg, 0) != pdTRUE) {
             if (m_mqttCfg->queueFullPolicy == MqttConfig::QueueFullPolicy::DropNewest) {
+                delete msg;  // Clean up the message we just allocated
+
                 if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                     m_metrics.messagesDropped++;
                     xSemaphoreGive(m_metricsMutex);
@@ -137,8 +152,10 @@ namespace isic {
 
                 return false;
             } else if (m_mqttCfg->queueFullPolicy == MqttConfig::QueueFullPolicy::DropOldest) {
-                MqttOutboundMessage discarded{};
+                MqttOutboundMessage *discarded{nullptr};
                 if (xQueueReceive(m_outboundQueue, &discarded, 0) == pdTRUE) {
+                    delete discarded;  // Free the discarded message
+
                     if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                         m_metrics.messagesDropped++;
                         xSemaphoreGive(m_metricsMutex);
@@ -146,9 +163,11 @@ namespace isic {
                     LOG_WARNING(MQTT_TAG, "Queue full, dropping oldest message");
                 }
                 if (xQueueSend(m_outboundQueue, &msg, 0) != pdTRUE) {
+                    delete msg;  // Clean up on failure
                     return false;
                 }
             } else {
+                delete msg;  // Clean up on failure
                 return false;
             }
         }
@@ -486,22 +505,32 @@ namespace isic {
         }
 
         for (std::uint8_t i = 0; i < 10; ++i) {
-            MqttOutboundMessage msg{};
-            if (xQueueReceive(m_outboundQueue, &msg, 0) != pdTRUE) {
+            MqttOutboundMessage *msg{nullptr};
+            if (xQueueReceive(m_outboundQueue, &msg, 0) != pdTRUE || !msg) {
                 break;
             }
 
-            if (!sendMessage(msg)) {
+            if (!sendMessage(*msg)) {
                 if (m_client.connected()) {
-                    if ( const auto age = millis() - msg.enqueuedMs; age < 30000) {
-                        (void) xQueueSendToFront(m_outboundQueue, &msg, 0); // TODO: handle failure?
+                    if (const auto age = millis() - msg->enqueuedMs; age < 30000) {
+                        // Re-queue for retry
+                        if (xQueueSendToFront(m_outboundQueue, &msg, 0) != pdTRUE) {
+                            delete msg;  // Failed to re-queue, clean up
+                        }
+                        // Don't delete msg here - it's back in the queue
                     } else {
+                        delete msg;  // Message too old, discard
+
                         if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                             m_metrics.messagesDropped++;
                             xSemaphoreGive(m_metricsMutex);
                         }
                     }
+                } else {
+                    delete msg;  // Not connected, discard
                 }
+            } else {
+                delete msg;  // Successfully sent, clean up
             }
         }
 
