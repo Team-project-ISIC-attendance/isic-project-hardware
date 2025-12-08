@@ -1,2 +1,7 @@
+# Project files∂
 .pio
 .idea
+
+# Docker volumes
+docker/mosquitto/data/*
+docker/mosquitto/log/*

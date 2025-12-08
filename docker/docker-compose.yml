@@ -1,0 +1,32 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: isic-mqtt-broker
+    restart: unless-stopped
+    ports:
+      # MQTT protocol
+      - "1883:1883"
+      # MQTT over WebSockets (useful for web-based testing tools)
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: MQTT Explorer web UI for debugging
+  mqtt-explorer:
+    image: smeagolworms4/mqtt-explorer
+    container_name: isic-mqtt-explorer
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    depends_on:
+      - mosquitto
+    profiles:
+      - debug
