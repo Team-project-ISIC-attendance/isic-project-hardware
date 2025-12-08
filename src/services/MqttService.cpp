@@ -3,7 +3,7 @@
 #include "core/Logger.hpp"
 
 #include <ArduinoJson.h>
-#include <new>
+#include <memory>
 
 namespace isic {
     namespace {
@@ -26,6 +26,7 @@ namespace isic {
                 .include(EventType::OtaStateChanged)
                 .include(EventType::OtaProgress)
                 .include(EventType::HealthStatusChanged)
+                .include(EventType::HealthReportReady)
                 .include(EventType::MqttMessageReceived)
         );
     }
@@ -98,7 +99,7 @@ namespace isic {
         }
 
         if (m_client.connected()) {
-            publishStatus("offline");
+            handleStatus("offline");
             m_client.disconnect();
         }
 
@@ -140,15 +141,15 @@ namespace isic {
                 }
                 LOG_WARNING(MQTT_TAG, "Queue full, dropping new message");
 
-                const Event evt{
+                auto evt = std::make_unique<Event>(Event{
                     .type = EventType::MqttQueueOverflow,
                     .payload = MqttQueueOverflowEvent{
                         .droppedCount = 1,
                         .currentQueueSize = uxQueueMessagesWaiting(m_outboundQueue)
                     },
                     .timestampMs = static_cast<std::uint64_t>(millis())
-                };
-                (void) m_bus.publish(evt); // TODO: handle publish failure?
+                });
+                (void) m_bus.publish(std::move(evt));  // TODO: check publish result
 
                 return false;
             } else if (m_mqttCfg->queueFullPolicy == MqttConfig::QueueFullPolicy::DropOldest) {
@@ -271,13 +272,16 @@ namespace isic {
                 }
                 break;
             }
-            case EventType::MqttMessageReceived: {
-                if (const auto *msg = std::get_if<MqttMessageEvent>(&event.payload)) {
-                    if (msg->topic == "health/report") {
-                        handleHealthReport(msg->payload);
-                    }
+            case EventType::HealthReportReady: {
+                if (const auto *health = std::get_if<HealthReportReadyEvent>(&event.payload)) {
+                    handleHealthReport(health->jsonPayload);
                 }
                 break;
+            }
+            case EventType::HealthStatusChanged: {
+                if (const auto *health = std::get_if<HealthStatusChangedEvent>(&event.payload)) {
+                    handleHealth(*health);
+                }
             }
             default:
                 break;
@@ -412,15 +416,15 @@ namespace isic {
         m_client.subscribe((topicModules() + "/+/set").c_str());
 
         // Publish online status
-        publishStatus("online");
+        handleStatus("online");
 
-        // Emit connected event
-        const Event evt{
+        // Emit connected event (heap-allocated for RTOS safety)
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::MqttConnected,
             .payload = std::monostate{},
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(evt, pdMS_TO_TICKS(100)); // TODO: handle publish failure?
+        });
+        (void) m_bus.publish(std::move(evt));  // TODO: check publish result
 
         if (m_wakeLock.isValid() && m_powerService) {
             m_powerService->releaseWakeLock(m_wakeLock);
@@ -438,12 +442,12 @@ namespace isic {
 
             LOG_WARNING(MQTT_TAG, "MQTT disconnected");
 
-            const Event evt{
+            auto evt = std::make_unique<Event>(Event{
                 .type = EventType::MqttDisconnected,
                 .payload = std::monostate{},
                 .timestampMs = static_cast<std::uint64_t>(millis())
-            };
-            (void) m_bus.publish(evt, pdMS_TO_TICKS(100)); // TODO: handle publish failure?
+            });
+            (void) m_bus.publish(std::move(evt));  // TODO: check publish result
         }
     }
 
@@ -478,24 +482,24 @@ namespace isic {
         }
 
         if (t == topicConfigSet()) {
-            const Event evt{
+            auto evt = std::make_unique<Event>(Event{
                 .type = EventType::MqttMessageReceived,
                 .payload = MqttMessageEvent{t, p},
                 .timestampMs = static_cast<std::uint64_t>(millis())
-            };
-            (void) m_bus.publish(evt, pdMS_TO_TICKS(100)); // TODO: handle publish failure?
+            });
+            (void) m_bus.publish(std::move(evt));  // TODO: check publish result
         } else if (t == topicOtaSet()) {
             // Forward OTA command to OtaModule via MqttMessageReceived event
             // OtaModule handles full JSON parsing with action, url, version, sha256, etc.
             LOG_INFO(MQTT_TAG, "OTA command received, forwarding to OtaModule");
 
-            const Event evt{
+            auto evt = std::make_unique<Event>(Event{
                 .type = EventType::MqttMessageReceived,
                 .payload = MqttMessageEvent{t, p},
                 .timestampMs = static_cast<std::uint64_t>(millis()),
                 .priority = EventPriority::E_HIGH
-            };
-            (void) m_bus.publish(evt, pdMS_TO_TICKS(100));  // TODO: handle publish failure?
+            });
+            (void) m_bus.publish(std::move(evt));  // TODO: check publish result
         }
     }
 
@@ -558,17 +562,25 @@ namespace isic {
 
     std::string MqttService::makeBaseTopic() const {
         if (!m_cfg) {
-            return "device/unknown";
+            return "isic/unknown";
         }
         return m_mqttCfg->baseTopic + "/" + m_cfg->device.deviceId;
     }
 
+    // Status topics builder
+    std::string MqttService::topicStatus() const {
+        return makeBaseTopic() + "/status";
+    }
+
+    // Config topic builder
     std::string MqttService::topicConfigSet() const {
         return makeBaseTopic() + "/config/set";
     }
-    std::string MqttService::topicConfigStatus() const {
-        return makeBaseTopic() + "/config/status";
+    std::string MqttService::topicConfig() const {
+        return makeBaseTopic() + "/config";
     }
+
+    // OTA topics builder
     std::string MqttService::topicOtaSet() const {
         return makeBaseTopic() + "/ota/set";
     }
@@ -581,29 +593,36 @@ namespace isic {
     std::string MqttService::topicOtaError() const {
         return makeBaseTopic() + "/ota/error";
     }
+
+    // attendance topics builder
     std::string MqttService::topicAttendance() const {
         return makeBaseTopic() + "/attendance";
     }
     std::string MqttService::topicAttendanceBatch() const {
         return makeBaseTopic() + "/attendance/batch";
     }
-    std::string MqttService::topicStatus() const {
-        return makeBaseTopic() + "/status";
-    }
+
+    // Health topics builder
     std::string MqttService::topicHealth() const {
-        return makeBaseTopic() + "/status/health";
+        return makeBaseTopic() + "/health";
     }
-    std::string MqttService::topicPn532Status() const {
-        return makeBaseTopic() + "/status/pn532";
+
+    std::string MqttService::topicHealthReport() const {
+        return makeBaseTopic() + "/health/report";
     }
+
+    // Metrics topics builder
     std::string MqttService::topicMetrics() const {
         return makeBaseTopic() + "/metrics";
     }
+
+    // Modules topics builder
     std::string MqttService::topicModules() const {
         return makeBaseTopic() + "/modules";
     }
 
-    void MqttService::publishStatus(const char *status) {
+    // Status publisher
+    void MqttService::handleStatus(std::string_view status) {
         JsonDocument doc{};
         doc["status"] = status;
         doc["ip"] = WiFi.localIP().toString();
@@ -617,10 +636,27 @@ namespace isic {
         (void) publishAsync(topicStatus(), payload, true); // TODO: handle failure?
     }
 
-    void MqttService::publishHealth(const std::string &healthJson) {
-        (void) publishAsync(topicHealth(), healthJson); // TODO: handle failure?
+    // Health report handler
+    void MqttService::handleHealth(const HealthStatusChangedEvent &event) {
+        JsonDocument doc{};
+
+        // State info
+        doc["old_state"] = toString(static_cast<OtaState>(event.oldState));
+        doc["new_state"] = toString(static_cast<OtaState>(event.newState));
+        doc["message"] = event.message;
+        doc["timestamp_ms"] = event.timestampMs;
+
+        std::string topic {topicHealth() + "/" + std::string{event.componentName}};
+        std::string payload{};
+        serializeJson(doc, payload);
+
+        (void) publishAsync(topic, payload); // TODO: handle failure?
+    }
+    void MqttService::handleHealthReport(const std::string& report) {
+        (void) publishAsync(topicHealthReport(), report); // TODO: handle failure?
     }
 
+    // Attendance event handler
     void MqttService::handleAttendanceEvent(const AttendanceRecord &record) {
         char cardStr[CARD_ID_SIZE * 2 + 1];
         std::uint32_t pos = 0;
@@ -641,6 +677,7 @@ namespace isic {
         (void) publishAsync(topicAttendance(), payload); // TODO: handle failure?
     }
 
+    // OTA event handlers
     void MqttService::handleOtaStateChanged(const OtaStateChangedEvent &event) {
         JsonDocument doc{};
 
@@ -676,7 +713,6 @@ namespace isic {
             (void) publishAsync(topicOtaError(), errorPayload); // TODO: handle failure?
         }
     }
-
     void MqttService::handleOtaProgress(const OtaProgressEvent &event) {
         JsonDocument doc{};
         doc["percent"] = event.percent;
@@ -699,9 +735,5 @@ namespace isic {
         serializeJson(doc, payload);
 
         (void) publishAsync(topicOtaProgress(), payload); // TODO: handle failure?
-    }
-
-    void MqttService::handleHealthReport(const std::string &payload) {
-        (void) publishAsync(topicHealth(), payload); // TODO: handle failure?
     }
 }

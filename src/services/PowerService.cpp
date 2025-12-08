@@ -1,6 +1,7 @@
 #include "services/PowerService.hpp"
 #include "core/Logger.hpp"
 
+#include <memory>
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
 #include <soc/rtc.h>
@@ -51,8 +52,8 @@ namespace isic {
             setCpuFrequency(m_cfg->cpuFrequencyMhz);
         }
 
-        // Publish wakeup event
-        const Event wakeEvt{
+        // Publish wakeup event (heap-allocated for RTOS safety)
+        auto wakeEvt = std::make_unique<Event>(Event{
             .type = EventType::WakeupOccurred,
             .payload = WakeupEvent{
                 .reason = m_lastWakeupReason,
@@ -60,8 +61,8 @@ namespace isic {
                 .timestampMs = static_cast<std::uint64_t>(millis())
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(wakeEvt); // TODO: handle publish failure?
+        });
+        (void) m_bus.publish(std::move(wakeEvt));
 
         // Start power management task
         m_running.store(true);
@@ -126,8 +127,8 @@ namespace isic {
 
         LOG_DEBUG(POWER_TAG, "Wake lock acquired: '%s' (id=%u, active=%u)", name, unsigned{lockId}, unsigned{activeCount});
 
-        // Publish event
-        const Event evt{
+        // Publish event (heap-allocated for RTOS safety)
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::WakeLockAcquired,
             .payload = WakeLockEvent{
                 .lockName = name,
@@ -135,8 +136,8 @@ namespace isic {
                 .totalActiveLocks = activeCount
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(evt); // TODO: handle publish failure?
+        });
+        (void) m_bus.publish(std::move(evt));  // TODO: check publish result
 
         // Reset idle timer
         resetIdleTimer();
@@ -169,8 +170,8 @@ namespace isic {
         if (found) {
             LOG_DEBUG(POWER_TAG, "Wake lock released: '%s' (id=%u, remaining=%u)", handle.name, unsigned{handle.id}, unsigned{activeCount});
 
-            // Publish event
-            const Event evt{
+            // Publish event (heap-allocated for RTOS safety)
+            auto evt = std::make_unique<Event>(Event{
                 .type = EventType::WakeLockReleased,
                 .payload = WakeLockEvent{
                     .lockName = handle.name,
@@ -178,8 +179,8 @@ namespace isic {
                     .totalActiveLocks = activeCount
                 },
                 .timestampMs = static_cast<std::uint64_t>(millis())
-            };
-            (void) m_bus.publish(evt); // TODO: handle publish failure?
+            });
+            (void) m_bus.publish(std::move(evt));  // TODO: check publish result
         } else {
             LOG_WARNING(POWER_TAG, "Wake lock not found for release: id=%u", unsigned{handle.id});
         }
@@ -220,16 +221,16 @@ namespace isic {
 
         LOG_INFO(POWER_TAG, "Entering light sleep");
 
-        // Publish sleep entering event
-        const Event evt{
+        // Publish sleep entering event (heap-allocated for RTOS safety)
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::SleepEntering,
             .payload = SleepEnteringEvent{
                 .targetState = PowerState::LightSleep,
                 .expectedDurationMs = m_cfg->timerWakeIntervalMs
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(evt, pdMS_TO_TICKS(50)); // Brief wait for delivery of event // TODO: adjust timeout?
+        });
+        (void) m_bus.publish(std::move(evt));  // TODO: check publish result
 
         transitionTo(PowerState::LightSleep);
         m_sleepEnteredAt = millis();
@@ -253,8 +254,8 @@ namespace isic {
         transitionTo(PowerState::WakingUp);
         resetIdleTimer();
 
-        // Publish wakeup event
-        const Event wakeEvt{
+        // Publish wakeup event (heap-allocated for RTOS safety)
+        auto wakeEvt = std::make_unique<Event>(Event{
             .type = EventType::WakeupOccurred,
             .payload = WakeupEvent{
                 .reason = m_lastWakeupReason,
@@ -262,8 +263,8 @@ namespace isic {
                 .timestampMs = static_cast<std::uint64_t>(millis())
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(wakeEvt); // TODO: handle publish failure?
+        });
+        (void) m_bus.publish(std::move(wakeEvt));  // TODO: check publish result
 
         transitionTo(PowerState::Active);
         return true;
@@ -287,16 +288,16 @@ namespace isic {
 
         LOG_INFO(POWER_TAG, "Entering deep sleep");
 
-        // Publish sleep entering event
-        const Event evt{
+        // Publish sleep entering event (heap-allocated for RTOS safety)
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::SleepEntering,
             .payload = SleepEnteringEvent{
                 .targetState = PowerState::DeepSleep,
                 .expectedDurationMs = m_cfg->timerWakeIntervalMs
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(evt, pdMS_TO_TICKS(100)); // Wait longer for deep sleep . // TODO: adjust timeout?
+        });
+        (void) m_bus.publish(std::move(evt));  // TODO: check publish result
 
         transitionTo(PowerState::DeepSleep);
 
@@ -445,7 +446,7 @@ namespace isic {
         if (oldState != newState) {
             LOG_DEBUG(POWER_TAG, "Power state: %s -> %s", toString(oldState), toString(newState));
 
-            const Event evt{
+            auto evt = std::make_unique<Event>(Event{
                 .type = EventType::PowerStateChanged,
                 .payload = PowerStateChangedEvent{
                     .oldState = oldState,
@@ -453,8 +454,8 @@ namespace isic {
                     .timestampMs = static_cast<std::uint64_t>(millis())
                 },
                 .timestampMs = static_cast<std::uint64_t>(millis())
-            };
-            (void) m_bus.publish(evt); // TODO: handle publish failure?
+            });
+            (void) m_bus.publish(std::move(evt)); // TODO: check publish result
         }
     }
 

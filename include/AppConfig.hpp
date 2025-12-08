@@ -55,7 +55,7 @@ namespace isic {
         inline constexpr std::size_t CARD_EVENT_QUEUE_SIZE = 32;
         inline constexpr std::size_t MQTT_OUTBOUND_QUEUE_SIZE = 64;
         inline constexpr std::size_t FEEDBACK_QUEUE_SIZE = 16;
-        inline constexpr std::size_t ATTENDANCE_BATCH_SIZE = 10;
+        inline constexpr std::size_t ATTENDANCE_BATCH_SIZE = 5;
 
         // Core assignments (ESP32 has cores 0 and 1)
         inline constexpr std::uint8_t PN532_TASK_CORE = 1;
@@ -125,8 +125,8 @@ namespace isic {
         // Batching configuration
         bool batchingEnabled{true};
         std::size_t batchMaxSize{defaults::ATTENDANCE_BATCH_SIZE};
-        std::uint32_t batchFlushIntervalMs{3000};  // Flush every 3 seconds
-        std::uint32_t batchFlushOnIdleMs{1000};    // Flush 1s after last event
+        std::uint32_t batchFlushIntervalMs{30000};  // Flush every 30 seconds
+        std::uint32_t batchFlushOnIdleMs{30000};    // Flush after 30s idle (same as interval)
 
         // Task tuning
         std::uint32_t taskStackSize{defaults::ATTENDANCE_TASK_STACK};
@@ -506,9 +506,9 @@ namespace isic {
             cfg.wifi.maxRetries = 5;
 
             // MQTT defaults
-            cfg.mqtt.broker = "192.168.0.186";
+            cfg.mqtt.broker = "192.168.0.178";
             cfg.mqtt.port = 1883;
-            cfg.mqtt.baseTopic = "device";
+            cfg.mqtt.baseTopic = "isic";
             cfg.mqtt.keepAliveSeconds = 60;
             cfg.mqtt.reconnectBackoffMinMs = 1000;
             cfg.mqtt.reconnectBackoffMaxMs = 30000;
@@ -525,8 +525,8 @@ namespace isic {
             cfg.attendance.eventQueueSize = defaults::CARD_EVENT_QUEUE_SIZE;
             cfg.attendance.queueHighWatermark = 24;
             cfg.attendance.batchingEnabled = true;
-            cfg.attendance.batchMaxSize = defaults::ATTENDANCE_BATCH_SIZE;
-            cfg.attendance.batchFlushIntervalMs = 3000;
+            cfg.attendance.batchMaxSize = defaults::ATTENDANCE_BATCH_SIZE;  // 5 cards
+            cfg.attendance.batchFlushIntervalMs = 30000;  // 30 seconds
 
             // OTA defaults
             cfg.ota.enabled = true;

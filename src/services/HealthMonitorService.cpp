@@ -1,6 +1,7 @@
 #include "services/HealthMonitorService.hpp"
 #include "core/Logger.hpp"
 
+#include <memory>
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
 
@@ -305,8 +306,8 @@ namespace isic {
 
         for (auto &entry: m_components) {
             if (entry.lastStatus.state != entry.previousState) {
-                // State changed - emit event
-                const Event evt{
+                // State changed - emit event (heap-allocated for RTOS safety)
+                auto evt = std::make_unique<Event>(Event{
                     .type = EventType::HealthStatusChanged,
                     .payload = HealthStatusChangedEvent{
                         .componentName = entry.lastStatus.componentName,
@@ -316,14 +317,14 @@ namespace isic {
                         .timestampMs = static_cast<std::uint64_t>(millis())
                     },
                     .timestampMs = static_cast<std::uint64_t>(millis())
-                };
+                });
                 entry.previousState = entry.lastStatus.state;
 
                 // Release mutex before publishing to avoid deadlock
                 xSemaphoreGive(m_componentsMutex);
 
                 LOG_INFO(HEALTH_TAG, "Health state changed: %.*s: %s -> %s", unsigned{entry.lastStatus.componentName.size()}, entry.lastStatus.componentName.data(), toString(entry.previousState), toString(entry.lastStatus.state));
-                (void) m_bus.publish(evt); // TODO: handle publish failure?
+                (void) m_bus.publish(std::move(evt));  // TODO: check publish result
 
                 // Re-acquire mutex to continue iteration
                 if (xSemaphoreTake(m_componentsMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
@@ -342,17 +343,17 @@ namespace isic {
     void HealthMonitorService::publishHealthToMqtt() const {
         const auto json{buildHealthJson()};
 
-        // Publish via event - MqttService will handle actual publishing
-        const Event evt{
-            .type = EventType::MqttMessageReceived, // We'll use a dedicated topic
-            .payload = MqttMessageEvent{
-                .topic = "health/report", // Internal marker, MqttService interprets this
-                .payload = json
+        // Publish via dedicated HealthReportReady event - MqttService will handle actual publishing
+        auto evt = std::make_unique<Event>(Event{
+            .type = EventType::HealthReportReady,
+            .payload = HealthReportReadyEvent{
+                .jsonPayload = json,
+                .timestampMs = static_cast<std::uint64_t>(millis())
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
+        });
 
-        (void) m_bus.publish(evt); // TODO: handle publish failure?
+        (void) m_bus.publish(std::move(evt));  // TODO: check publish result
         LOG_INFO(HEALTH_TAG, "Published health report to MQTT");
     }
 

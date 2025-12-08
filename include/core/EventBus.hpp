@@ -7,12 +7,16 @@
  *
  * The EventBus provides a thread-safe, priority-aware publish-subscribe
  * system for decoupled component communication on FreeRTOS.
+ *
+ * @note Events are heap-allocated and ownership is transferred to the EventBus
+ *       when published. The EventBus deletes events after dispatching to all
+ *       listeners. This avoids std::string corruption through FreeRTOS queue memcpy.
  */
 
 #include <Arduino.h>
 
 #include <vector>
-#include <cstdint>
+#include <memory>
 
 #include "core/Types.hpp"
 
@@ -127,17 +131,31 @@ namespace isic {
 
         /**
          * @brief Publish an event (non-blocking by default).
-         * @param event Event to publish
+         *
+         * Takes ownership of the event via unique_ptr. The EventBus will
+         * automatically clean up the event after dispatching to all listeners.
+         * If queueing fails, the event is cleaned up immediately.
+         *
+         * Usage:
+         *   bus.publish(std::make_unique<Event>(Event{...}));
+         *
+         * @param event unique_ptr to event (ownership transferred)
          * @param ticksToWait How long to wait if queue is full (0 = non-blocking)
          * @return true if event was queued
          */
-        [[nodiscard]] bool publish(const Event& event, TickType_t ticksToWait = 0);
+        [[nodiscard]] bool publish(std::unique_ptr<Event> event, TickType_t ticksToWait = 0);
 
         /**
          * @brief Publish a high-priority event.
+         *
          * High-priority events are processed before normal events.
+         * Takes ownership of the event via unique_ptr.
+         *
+         * @param event unique_ptr to event (ownership transferred)
+         * @param ticksToWait How long to wait if queue is full (0 = non-blocking)
+         * @return true if event was queued
          */
-        [[nodiscard]] bool publishHighPriority(const Event& event, TickType_t ticksToWait = 0);
+        [[nodiscard]] bool publishHighPriority(std::unique_ptr<Event> event, TickType_t ticksToWait = 0);
 
         /**
          * @brief Check if event bus is running.

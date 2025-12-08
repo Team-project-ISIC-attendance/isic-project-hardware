@@ -6,6 +6,8 @@
 #include "modules/OtaModule.hpp"
 #include "core/Logger.hpp"
 
+#include <memory>
+
 namespace isic {
     namespace {
         constexpr auto *OTA_MODULE_TAG{"OtaModule"};
@@ -183,41 +185,41 @@ namespace isic {
         switch (newState) {
             case OtaState::Downloading: // Signal OTA started (LED pattern, etc.)
             {
-                const Event feedbackEvt{
+                auto feedbackEvt = std::make_unique<Event>(Event{
                     .type = EventType::FeedbackRequested,
                     .payload = FeedbackRequestEvent{
                         .signal = FeedbackSignal::OtaStarted,
                         .repeatCount = 1
                     },
                     .timestampMs = static_cast<std::uint64_t>(millis())
-                };
-                (void) m_bus.publish(feedbackEvt); // TODO: check publish result
+                });
+                (void) m_bus.publish(std::move(feedbackEvt)); // TODO: check publish result
                 break;
             }
             case OtaState::Completed: // Signal OTA complete (success pattern)
             {
-                const Event feedbackEvt{
+                auto feedbackEvt = std::make_unique<Event>(Event{
                     .type = EventType::FeedbackRequested,
                     .payload = FeedbackRequestEvent{
                         .signal = FeedbackSignal::OtaComplete,
                         .repeatCount = 1
                     },
                     .timestampMs = static_cast<std::uint64_t>(millis())
-                };
-                (void) m_bus.publish(feedbackEvt); // TODO: check publish result
+                });
+                (void) m_bus.publish(std::move(feedbackEvt)); // TODO: check publish result
                 break;
             }
             case OtaState::Failed: // Signal OTA failed (error pattern)
             {
-                Event feedbackEvt{
+                auto feedbackEvt = std::make_unique<Event>(Event{
                     .type = EventType::FeedbackRequested,
                     .payload = FeedbackRequestEvent{
                         .signal = FeedbackSignal::Error,
                         .repeatCount = 3
                     },
                     .timestampMs = static_cast<std::uint64_t>(millis())
-                };
-                (void) m_bus.publish(feedbackEvt); // TODO: check publish result
+                });
+                (void) m_bus.publish(std::move(feedbackEvt)); // TODO: check publish result
                 break;
             }
             default: {

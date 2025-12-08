@@ -87,7 +87,7 @@ namespace {
 
     // ==================== Timing ====================
     std::uint32_t g_lastStatusLogMs = 0;
-    constexpr std::uint32_t STATUS_LOG_INTERVAL_MS = 60000;
+    constexpr std::uint32_t STATUS_LOG_INTERVAL_MS = 3600;
 }
 
 /**

@@ -1,6 +1,7 @@
 #include "core/ModuleManager.hpp"
 #include "core/Logger.hpp"
 
+#include <memory>
 #include <algorithm>
 
 namespace isic {
@@ -304,7 +305,7 @@ namespace isic {
     }
 
     void ModuleManager::publishModuleStateChange(std::string_view name, bool enabled) {
-        const Event evt{
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::ModuleStateChanged,
             .payload = ModuleStateChangedEvent{
                 .moduleName = name,
@@ -312,7 +313,7 @@ namespace isic {
                 .timestampMs = static_cast<std::uint64_t>(millis())
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(evt);
+        });
+        (void) m_bus.publish(std::move(evt));  // TODO: check publish result
     }
 }

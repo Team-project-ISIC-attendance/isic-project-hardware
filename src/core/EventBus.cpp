@@ -1,6 +1,8 @@
 #include "core/EventBus.hpp"
 #include "core/Logger.hpp"
 
+#include <memory>
+
 namespace isic {
     namespace {
         constexpr auto *EVENT_TAG{"EventBus"};
@@ -8,8 +10,9 @@ namespace isic {
     }
 
     EventBus::EventBus(const Config &cfg) : m_config(cfg) {
-        m_queue = xQueueCreate(cfg.queueLength, sizeof(Event));
-        m_highPriorityQueue = xQueueCreate(cfg.highPriorityQueueLength, sizeof(Event));
+        // Queues store Event* pointers to avoid std::string corruption via memcpy
+        m_queue = xQueueCreate(cfg.queueLength, sizeof(Event*));
+        m_highPriorityQueue = xQueueCreate(cfg.highPriorityQueueLength, sizeof(Event*));
         m_listenersMutex = xSemaphoreCreateMutex();
         m_listeners.reserve(MAX_LISTENERS);
     }
@@ -17,12 +20,20 @@ namespace isic {
     EventBus::~EventBus() {
         stop();
 
+        // Drain and delete any remaining events in the queues
+        Event* evt{nullptr};
         if (m_queue) {
+            while (xQueueReceive(m_queue, &evt, 0) == pdTRUE) {
+                delete evt;
+            }
             vQueueDelete(m_queue);
             m_queue = nullptr;
         }
 
         if (m_highPriorityQueue) {
+            while (xQueueReceive(m_highPriorityQueue, &evt, 0) == pdTRUE) {
+                delete evt;
+            }
             vQueueDelete(m_highPriorityQueue);
             m_highPriorityQueue = nullptr;
         }
@@ -103,32 +114,47 @@ namespace isic {
         }
     }
 
-    bool EventBus::publish(const Event &event, const TickType_t ticksToWait) {
+    bool EventBus::publish(std::unique_ptr<Event> event, const TickType_t ticksToWait) {
+        if (!event) {
+            return false;
+        }
+
         if (!m_queue) {
+            // unique_ptr automatically cleans up
             return false;
         }
 
         // Use high-priority queue for critical events
-        if (event.priority >= EventPriority::E_HIGH && m_highPriorityQueue) {
-            return publishHighPriority(event, ticksToWait);
+        if (event->priority >= EventPriority::E_HIGH && m_highPriorityQueue) {
+            return publishHighPriority(std::move(event), ticksToWait);
         }
 
-        if (xQueueSend(m_queue, &event, ticksToWait) != pdPASS) {
-            LOG_WARNING(EVENT_TAG, "Event queue full, dropping event type=%u", static_cast<unsigned>(event.type));
+        // Release ownership to raw pointer for FreeRTOS queue
+        Event* rawPtr = event.release();
+        if (xQueueSend(m_queue, &rawPtr, ticksToWait) != pdPASS) {
+            LOG_WARNING(EVENT_TAG, "Event queue full, dropping event type=%u", static_cast<unsigned>(rawPtr->type));
+            delete rawPtr;  // Re-take ownership and clean up
             return false;
         }
 
         return true;
     }
 
-    bool EventBus::publishHighPriority(const Event &event, const TickType_t ticksToWait) {
-        if (!m_highPriorityQueue) {
-            // Fall back to normal queue
-            return publish(event, ticksToWait);
+    bool EventBus::publishHighPriority(std::unique_ptr<Event> event, const TickType_t ticksToWait) {
+        if (!event) {
+            return false;
         }
 
-        if (xQueueSendToFront(m_highPriorityQueue, &event, ticksToWait) != pdPASS) {
-            LOG_WARNING(EVENT_TAG, "High priority queue full, type=%u", static_cast<unsigned>(event.type));
+        if (!m_highPriorityQueue) {
+            // Fall back to normal queue
+            return publish(std::move(event), ticksToWait);
+        }
+
+        // Release ownership to raw pointer for FreeRTOS queue
+        Event* rawPtr = event.release();
+        if (xQueueSendToFront(m_highPriorityQueue, &rawPtr, ticksToWait) != pdPASS) {
+            LOG_WARNING(EVENT_TAG, "High priority queue full, type=%u", static_cast<unsigned>(rawPtr->type));
+            delete rawPtr;  // Re-take ownership and clean up
             return false;
         }
 
@@ -142,24 +168,27 @@ namespace isic {
     void EventBus::eventTask() {
         LOG_INFO(EVENT_TAG, "Event bus task started");
 
-        Event event{};
+        Event* rawEvent{nullptr};
 
         while (m_running) {
             // First check high-priority queue (non-blocking)
             bool hasEvent{false};
 
             if (m_highPriorityQueue) {
-                hasEvent = (xQueueReceive(m_highPriorityQueue, &event, 0) == pdTRUE);
+                hasEvent = (xQueueReceive(m_highPriorityQueue, &rawEvent, 0) == pdTRUE);
             }
 
             // If no high-priority event, check normal queue with timeout
             if (!hasEvent) {
-                hasEvent = (xQueueReceive(m_queue, &event, pdMS_TO_TICKS(50)) == pdTRUE);
+                hasEvent = (xQueueReceive(m_queue, &rawEvent, pdMS_TO_TICKS(50)) == pdTRUE);
             }
 
-            // Dispatch event if received one
-            if (hasEvent) {
-                dispatchEvent(event);
+            // Wrap in unique_ptr for automatic cleanup (RAII)
+            if (hasEvent && rawEvent) {
+                std::unique_ptr<Event> event{rawEvent};
+                rawEvent = nullptr;
+                dispatchEvent(*event);
+                // unique_ptr automatically deletes when going out of scope
             }
         }
 

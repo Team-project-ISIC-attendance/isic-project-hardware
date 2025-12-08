@@ -4,6 +4,7 @@
 #include "core/Logger.hpp"
 
 #include <ArduinoJson.h>
+#include <memory>
 
 namespace isic {
     namespace {
@@ -41,6 +42,11 @@ namespace isic {
             m_metricsMutex = nullptr;
         }
         if (m_recordQueue) {
+            // Drain and delete any remaining records in the queue
+            AttendanceRecord* rec{nullptr};
+            while (xQueueReceive(m_recordQueue, &rec, 0) == pdTRUE) {
+                delete rec;
+            }
             vQueueDelete(m_recordQueue);
             m_recordQueue = nullptr;
         }
@@ -55,8 +61,8 @@ namespace isic {
         m_power = &power;
         m_enabled.store(m_cfg->batchingEnabled);
 
-        // Create record queue
-        m_recordQueue = xQueueCreate(RECORD_QUEUE_SIZE, sizeof(AttendanceRecord));
+        // Create record queue (stores AttendanceRecord* pointers to avoid std::string corruption)
+        m_recordQueue = xQueueCreate(RECORD_QUEUE_SIZE, sizeof(AttendanceRecord*));
         if (!m_recordQueue) {
             return Status::Error(ErrorCode::ResourceExhausted, "Queue creation failed");
         }
@@ -73,9 +79,9 @@ namespace isic {
             1
         );
 
-        LOG_INFO(BATCHER_TAG, "AttendanceBatcher started: maxBatch=%u, flushInterval=%ums",
+        LOG_INFO(BATCHER_TAG, "AttendanceBatcher started: maxBatch=%u, flushInterval=%us",
                  static_cast<unsigned>(m_cfg->batchMaxSize),
-                 m_cfg->batchFlushIntervalMs);
+                 m_cfg->batchFlushIntervalMs / 1000);
 
         return Status::OK();
     }
@@ -97,12 +103,26 @@ namespace isic {
     }
 
     bool AttendanceBatcher::addRecord(const AttendanceRecord& record) {
-        if (!m_enabled.load() || !m_recordQueue) {
+        if (!m_enabled.load()) {
+            LOG_WARNING(BATCHER_TAG, "Batcher disabled, rejecting record");
+            return false;
+        }
+        
+        if (!m_recordQueue) {
+            LOG_WARNING(BATCHER_TAG, "Record queue not initialized");
             return false;
         }
 
-        // Non-blocking enqueue
-        if (xQueueSend(m_recordQueue, &record, 0) != pdTRUE) {
+        // Heap-allocate the record to avoid std::string corruption through FreeRTOS queue memcpy
+        auto* rec = new (std::nothrow) AttendanceRecord{record};
+        if (!rec) {
+            LOG_ERROR(BATCHER_TAG, "Failed to allocate record");
+            return false;
+        }
+
+        // Non-blocking enqueue (queue stores pointer)
+        if (xQueueSend(m_recordQueue, &rec, 0) != pdTRUE) {
+            delete rec;  // Clean up since we couldn't queue it
             if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 m_metrics.recordsDropped++;
                 xSemaphoreGive(m_metricsMutex);
@@ -116,6 +136,10 @@ namespace isic {
             m_metrics.lastRecordReceivedMs = millis();
             xSemaphoreGive(m_metricsMutex);
         }
+        
+        LOG_DEBUG(BATCHER_TAG, "Record queued: seq=%u, queue=%u",
+                  static_cast<unsigned>(record.sequenceNumber),
+                  static_cast<unsigned>(uxQueueMessagesWaiting(m_recordQueue)));
 
         return true;
     }
@@ -234,12 +258,16 @@ namespace isic {
     void AttendanceBatcher::batcherTask() {
         LOG_DEBUG(BATCHER_TAG, "Batcher task started");
 
-        AttendanceRecord record{};
+        AttendanceRecord* rec{nullptr};
 
         while (m_running.load()) {
-            // Process incoming records
-            while (xQueueReceive(m_recordQueue, &record, pdMS_TO_TICKS(TASK_LOOP_MS)) == pdTRUE) {
-                processIncomingRecord(record);
+            // Process incoming records (queue stores pointers)
+            while (xQueueReceive(m_recordQueue, &rec, pdMS_TO_TICKS(TASK_LOOP_MS)) == pdTRUE) {
+                if (rec) {
+                    processIncomingRecord(*rec);
+                    delete rec;  // Clean up after processing
+                    rec = nullptr;
+                }
             }
 
             // Check if we should flush based on time
@@ -271,10 +299,19 @@ namespace isic {
         // Start new batch if empty
         if (m_currentBatch.isEmpty()) {
             m_batchStartMs = now;
+            LOG_DEBUG(BATCHER_TAG, "Starting new batch");
         }
 
         m_lastRecordMs = now;
+        
+        const auto prevCount = m_currentBatch.count;
         m_currentBatch.add(record);
+        
+        LOG_INFO(BATCHER_TAG, "Added record to batch: count=%u->%u, seq=%u, maxSize=%u",
+                 static_cast<unsigned>(prevCount),
+                 static_cast<unsigned>(m_currentBatch.count),
+                 static_cast<unsigned>(record.sequenceNumber),
+                 m_cfg ? static_cast<unsigned>(m_cfg->batchMaxSize) : 0);
 
         if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
             m_metrics.recordsBatched++;
@@ -288,6 +325,8 @@ namespace isic {
         // Check if batch is full
         if (m_currentBatch.isFull() ||
             (m_cfg && m_currentBatch.count >= m_cfg->batchMaxSize)) {
+            LOG_INFO(BATCHER_TAG, "Batch full (%u records), flushing now",
+                     static_cast<unsigned>(m_currentBatch.count));
             flushCurrentBatch();
         }
 
@@ -303,11 +342,17 @@ namespace isic {
 
         // Flush if batch has been open too long
         if (m_cfg && now - m_batchStartMs >= m_cfg->batchFlushIntervalMs) {
+            LOG_DEBUG(BATCHER_TAG, "Time flush triggered: %ums elapsed (interval=%ums)",
+                      static_cast<unsigned>(now - m_batchStartMs),
+                      m_cfg->batchFlushIntervalMs);
             return true;
         }
 
         // Flush if no new records for a while (idle flush)
         if (m_cfg && now - m_lastRecordMs >= m_cfg->batchFlushOnIdleMs) {
+            LOG_DEBUG(BATCHER_TAG, "Idle flush triggered: %ums since last record (idle=%ums)",
+                      static_cast<unsigned>(now - m_lastRecordMs),
+                      m_cfg->batchFlushOnIdleMs);
             return true;
         }
 
@@ -321,8 +366,17 @@ namespace isic {
             return;
         }
 
-        LOG_DEBUG(BATCHER_TAG, "Flushing batch with %u records",
-                  static_cast<unsigned>(m_currentBatch.count));
+        LOG_INFO(BATCHER_TAG, "Flushing batch with %u records",
+                 static_cast<unsigned>(m_currentBatch.count));
+        
+        // Log each record in the batch for debugging
+        for (std::size_t i = 0; i < m_currentBatch.count; ++i) {
+            const auto& rec = m_currentBatch.records[i];
+            LOG_DEBUG(BATCHER_TAG, "  [%u] card=%02X%02X%02X%02X seq=%u",
+                      static_cast<unsigned>(i),
+                      rec.cardId[0], rec.cardId[1], rec.cardId[2], rec.cardId[3],
+                      static_cast<unsigned>(rec.sequenceNumber));
+        }
 
         // Try to send directly if MQTT is connected
         if (m_mqttConnected.load() && sendBatch(m_currentBatch)) {

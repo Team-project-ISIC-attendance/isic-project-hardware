@@ -2,6 +2,7 @@
 
 #include "core/Logger.hpp"
 
+#include <memory>
 #include <ArduinoJson.h>
 
 namespace isic {
@@ -421,12 +422,12 @@ namespace isic {
     }
 
     void ConfigService::notifyUpdated() const {
-        const Event evt{
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::ConfigUpdated,
             .payload = ConfigUpdatedEvent{&m_config},
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(evt, portMAX_DELAY); // TODO: handle publish error?
+        });
+        (void) m_bus.publish(std::move(evt)); // TODO: check publish result
     }
 
     void ConfigService::onEvent(const Event &event) {

@@ -3,6 +3,8 @@
 #include "services/AttendanceBatcher.hpp"
 #include "core/Logger.hpp"
 
+#include <memory>
+
 namespace isic {
     namespace {
         constexpr auto *ATT_TAG{"Attendance"};
@@ -258,7 +260,7 @@ namespace isic {
             LOG_WARNING(ATT_TAG, "Card queue full, event dropped");
             signalError();
 
-            const Event evt{
+            auto evt = std::make_unique<Event>(Event{
                 .type = EventType::QueueOverflow,
                 .payload = QueueOverflowEvent{
                     .queueName = "card_queue",
@@ -266,8 +268,8 @@ namespace isic {
                     .queueCapacity = CARD_QUEUE_SIZE
                 },
                 .timestampMs = static_cast<std::uint64_t>(millis())
-            };
-            (void) m_bus.publish(evt); // TODO: handle publish failure?
+            });
+            (void) m_bus.publish(std::move(evt)); // TODO: check publish result
         } else {
             if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 m_metrics.eventsQueued++;
@@ -407,14 +409,19 @@ namespace isic {
     void AttendanceModule::enqueueAttendance(const AttendanceRecord &record) {
         // If batching is enabled and batcher is available, use it
         if (m_attCfg && m_attCfg->batchingEnabled && m_batcher) {
+            LOG_DEBUG(ATT_TAG, "Sending to batcher: seq=%u", unsigned{record.sequenceNumber});
             if (m_batcher->addRecord(record)) {
                 if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                     m_metrics.eventsBatched++;
                     xSemaphoreGive(m_metricsMutex);
                 }
+                LOG_DEBUG(ATT_TAG, "Record batched successfully");
                 return;
             }
+            LOG_WARNING(ATT_TAG, "Batcher rejected record, falling back to direct publish");
             // Fall through to direct publish if batching fails
+        } else {
+            LOG_DEBUG(ATT_TAG, "Batching disabled or no batcher, using direct publish");
         }
 
         // Direct publish mode
@@ -426,13 +433,13 @@ namespace isic {
     }
 
     void AttendanceModule::publishAttendance(const AttendanceRecord &record) {
-        const Event evt{
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::AttendanceRecorded,
             .payload = record,
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
+        });
 
-        if (m_bus.publish(evt, 0)) {
+        if (m_bus.publish(std::move(evt))) {
             if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 m_metrics.eventsPublished++;
                 m_metrics.lastEventPublishedMs = millis();
@@ -505,15 +512,15 @@ namespace isic {
                 continue;
             }
 
-            const Event evt{
+            auto evt = std::make_unique<Event>(Event{
                 .type = EventType::AttendanceRecorded,
                 .payload = record,
                 .timestampMs = static_cast<std::uint64_t>(millis())
-            };
+            });
 
             xSemaphoreGive(m_offlineMutex);
 
-            const bool published{m_bus.publish(evt, pdMS_TO_TICKS(50))};
+            const bool published{m_bus.publish(std::move(evt))};
 
             if (xSemaphoreTake(m_offlineMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
                 return;
@@ -567,7 +574,7 @@ namespace isic {
     void AttendanceModule::emitHighLoadEvent() {
         LOG_WARNING(ATT_TAG, "High load detected, queue size: %u/%u", unsigned{m_metrics.currentQueueSize}, unsigned{CARD_QUEUE_SIZE});
 
-        const Event evt{
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::HighLoadDetected,
             .payload = HighLoadEvent{
                 .source = "attendance_queue",
@@ -577,8 +584,8 @@ namespace isic {
             },
             .timestampMs = static_cast<std::uint64_t>(millis()),
             .priority = EventPriority::E_HIGH
-        };
-        (void) m_bus.publish(evt); // TODO: handle publish failure?
+        });
+        (void) m_bus.publish(std::move(evt)); // TODO: check publish result
     }
 
     void AttendanceModule::signalSuccess() {
@@ -586,15 +593,15 @@ namespace isic {
             m_feedback->signalSuccess();
         } else {
             // Publish feedback request event as fallback
-            const Event evt{
+            auto evt = std::make_unique<Event>(Event{
                 .type = EventType::FeedbackRequested,
                 .payload = FeedbackRequestEvent{
                     .signal = FeedbackSignal::Success,
                     .repeatCount = 1
                 },
                 .timestampMs = static_cast<std::uint64_t>(millis())
-            };
-            (void) m_bus.publish(evt); // TODO: handle publish failure?
+            });
+            (void) m_bus.publish(std::move(evt)); // TODO: check publish result
         }
     }
 
@@ -602,15 +609,15 @@ namespace isic {
         if (m_feedback) {
             m_feedback->signalError();
         } else {
-            const Event evt{
+            auto evt = std::make_unique<Event>(Event{
                 .type = EventType::FeedbackRequested,
                 .payload = FeedbackRequestEvent{
                     .signal = FeedbackSignal::Error,
                     .repeatCount = 1
                 },
                 .timestampMs = static_cast<std::uint64_t>(millis())
-            };
-            (void) m_bus.publish(evt); // TODO: handle publish failure?
+            });
+            (void) m_bus.publish(std::move(evt)); // TODO: check publish result
         }
     }
 }

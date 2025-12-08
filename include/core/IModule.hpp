@@ -12,6 +12,7 @@
 
 #include <string_view>
 #include <cstdint>
+#include <memory>
 
 #include "AppConfig.hpp"
 #include "core/Types.hpp"
@@ -252,9 +253,10 @@ namespace isic {
 
         /**
          * @brief Publish an event.
+         * @param event unique_ptr to event (ownership transferred to EventBus)
          */
-        [[nodiscard]] bool publish(const Event& event) const {
-            return m_bus.publish(event);
+        [[nodiscard]] bool publish(std::unique_ptr<Event> event) const {
+            return m_bus.publish(std::move(event));
         }
 
     private:

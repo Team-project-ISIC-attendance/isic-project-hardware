@@ -2,6 +2,7 @@
 #include "services/PowerService.hpp"
 #include "core/Logger.hpp"
 
+#include <memory>
 #include <SPI.h>
 
 namespace isic {
@@ -167,16 +168,16 @@ namespace isic {
             clearError();
             transitionTo(Pn532Status::Ready);
 
-            // Publish recovery event
-            const Event evt{
+            // Publish recovery event (heap-allocated for RTOS safety)
+            auto evt = std::make_unique<Event>(Event{
                 .type = EventType::Pn532Recovered,
                 .payload = Pn532RecoveredEvent{
                     .recoveryAttempts = m_state.recoveryAttempts,
                     .downtimeMs = static_cast<std::uint32_t>(millis() - m_state.errorStartMs)
                 },
                 .timestampMs = static_cast<std::uint64_t>(millis())
-            };
-            (void) m_bus.publish(evt);
+            });
+            (void) m_bus.publish(std::move(evt)); // TODO: check publish result
 
             LOG_INFO(PN532_TAG, "Recovery successful");
             return true;
@@ -330,16 +331,16 @@ namespace isic {
                 m_lastPollMs = now;
 
                 if (const auto cardId{readCardInternal()}) {
-                    // Card detected - publish event
-                    const Event evt{
+                    // Card detected - publish event (heap-allocated for RTOS safety)
+                    auto evt = std::make_unique<Event>(Event{
                         .type = EventType::CardScanned,
                         .payload = CardScannedEvent{
                             .cardId = *cardId,
                             .timestampMs = static_cast<std::uint64_t>(now)
                         },
                         .timestampMs = static_cast<std::uint64_t>(now)
-                    };
-                    (void) m_bus.publish(evt);
+                    });
+                    (void) m_bus.publish(std::move(evt)); // TODO: check publish result
 
                     LOG_DEBUG(PN532_TAG, "Card scanned, ID published");
                 }
@@ -513,7 +514,7 @@ namespace isic {
     }
 
     void Pn532Driver::publishStatusChange(Pn532Status oldStatus, Pn532Status newStatus) {
-        const Event evt{
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::Pn532StatusChanged,
             .payload = Pn532StatusChangedEvent{
                 .oldStatus = oldStatus,
@@ -521,12 +522,12 @@ namespace isic {
                 .timestampMs = static_cast<std::uint64_t>(millis())
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(evt); // TODO: handle publish failure?
+        });
+        (void) m_bus.publish(std::move(evt)); // TODO: check publish result
     }
 
     void Pn532Driver::publishError(Pn532Error error, const std::string &message) {
-        const Event evt{
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::Pn532Error,
             .payload = Pn532ErrorEvent{
                 .errorMessage = message,
@@ -535,22 +536,22 @@ namespace isic {
                 .timestampMs = static_cast<std::uint64_t>(millis())
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(evt); // TODO: handle publish failure?
+        });
+        (void) m_bus.publish(std::move(evt));
     }
 
     void Pn532Driver::publishCardEvent(const CardId &cardId, bool present) {
         const EventType type{present ? EventType::Pn532CardPresent : EventType::Pn532CardRemoved};
 
-        const Event evt{
+        auto evt = std::make_unique<Event>(Event{
             .type = type,
             .payload = Pn532CardEvent{
                 .cardId = cardId,
                 .timestampMs = static_cast<std::uint64_t>(millis())
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(evt); // TODO: handle publish failure?
+        });
+        (void) m_bus.publish(std::move(evt)); // TODO: check publish result
     }
 
     // Static IRQ handler setup for PN532

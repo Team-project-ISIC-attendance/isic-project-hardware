@@ -193,6 +193,7 @@ namespace isic {
 
         // Health Events
         HealthStatusChanged,
+        HealthReportReady,
         HighLoadDetected,
         QueueOverflow,
 
@@ -233,6 +234,7 @@ namespace isic {
             case EventType::WakeLockAcquired:       return "wake_lock_acquired";
             case EventType::WakeLockReleased:       return "wake_lock_released";
             case EventType::HealthStatusChanged:    return "health_status_changed";
+            case EventType::HealthReportReady:      return "health_report_ready";
             case EventType::HighLoadDetected:       return "high_load_detected";
             case EventType::QueueOverflow:          return "queue_overflow";
             case EventType::FeedbackRequested:      return "feedback_requested";
@@ -387,6 +389,10 @@ namespace isic {
         std::string message{};
         std::uint64_t timestampMs{0};
     };
+    struct HealthReportReadyEvent {
+        std::string jsonPayload{};
+        std::uint64_t timestampMs{0};
+    };
     struct HighLoadEvent {
         std::string_view source{};
         std::size_t currentLoad{0};
@@ -446,6 +452,7 @@ namespace isic {
         WakeLockEvent,
         // Health
         HealthStatusChangedEvent,
+        HealthReportReadyEvent,
         HighLoadEvent,
         QueueOverflowEvent,
         // Feedback

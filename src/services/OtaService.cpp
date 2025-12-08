@@ -29,6 +29,7 @@
 #include "services/PowerService.hpp"
 #include "core/Logger.hpp"
 
+#include <memory>
 #include <WiFi.h>
 #include <mbedtls/sha256.h>
 #include <esp_app_desc.h>
@@ -277,8 +278,8 @@ namespace isic {
         // For now, we just check if updateServerUrl is configured and publish version info
 
         if (!m_cfg->updateServerUrl.empty()) {
-            // Publish current version info
-            const Event evt{
+            // Publish current version info (heap-allocated for RTOS safety)
+            auto evt = std::make_unique<Event>(Event{
                 .type = EventType::OtaVersionInfo,
                 .payload = OtaVersionInfoEvent{
                     .currentVersion = m_cfg->currentVersion,
@@ -286,8 +287,8 @@ namespace isic {
                     .updateAvailable = false
                 },
                 .timestampMs = static_cast<std::uint64_t>(millis())
-            };
-            (void) m_bus.publish(evt); // TODO: handle publish failure?
+            });
+            (void) m_bus.publish(std::move(evt));  // TODO: check publish result
         }
 
         if (xSemaphoreTake(m_metricsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -346,8 +347,8 @@ namespace isic {
 
         LOG_INFO(OTA_TAG, "Rollback configured - restarting...");
 
-        // Publish event before restart
-        const Event evt{
+        // Publish event before restart (heap-allocated for RTOS safety)
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::OtaStateChanged,
             .payload = OtaStateChangedEvent{
                 .oldState = static_cast<std::uint8_t>(m_state.load()),
@@ -357,8 +358,8 @@ namespace isic {
             },
             .timestampMs = static_cast<std::uint64_t>(millis()),
             .priority = EventPriority::E_CRITICAL
-        };
-        (void) m_bus.publish(evt); // TODO: handle publish failure?
+        });
+        (void) m_bus.publish(std::move(evt));  // TODO: check publish result
 
         vTaskDelay(pdMS_TO_TICKS(500));
         ESP.restart();
@@ -520,8 +521,8 @@ namespace isic {
         if ( const auto oldState = m_state.exchange(newState); oldState != newState) {
             LOG_INFO(OTA_TAG, "State: %s -> %s%s%s", toString(oldState), toString(newState), message.empty() ? "" : " - ", message.c_str());
 
-            // Publish state change event
-            const Event evt{
+            // Publish state change event (heap-allocated for RTOS safety)
+            auto evt = std::make_unique<Event>(Event{
                 .type = EventType::OtaStateChanged,
                 .payload = OtaStateChangedEvent{
                     .oldState = static_cast<std::uint8_t>(oldState),
@@ -531,8 +532,8 @@ namespace isic {
                 },
                 .timestampMs = static_cast<std::uint64_t>(millis()),
                 .priority = EventPriority::E_HIGH
-            };
-            (void) m_bus.publish(evt); // TODO: handle publish failure?
+            });
+            (void) m_bus.publish(std::move(evt));  // TODO: check publish result
         }
     }
 
@@ -1069,8 +1070,8 @@ namespace isic {
             m_progressCallback(percent, bytesDownloaded, m_metrics.totalBytes);
         }
 
-        // Publish progress event
-        const Event evt{
+        // Publish progress event (heap-allocated for RTOS safety)
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::OtaProgress,
             .payload = OtaProgressEvent{
                 .percent = percent,
@@ -1080,8 +1081,8 @@ namespace isic {
                 .message = std::string("Downloading: ") + std::to_string(percent) + "%"
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(evt); // TODO: handle publish failure?
+        });
+        (void) m_bus.publish(std::move(evt));  // TODO: check publish result
     }
 
     void OtaService::reportError(const OtaError error, const std::string &message) {
@@ -1090,8 +1091,8 @@ namespace isic {
 
         LOG_ERROR(OTA_TAG, "Error [%s]: %s", toString(error), message.c_str());
 
-        // Publish error event
-        const Event evt{
+        // Publish error event (heap-allocated for RTOS safety)
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::OtaProgress,
             .payload = OtaProgressEvent{
                 .percent = m_progressPercent.load(),
@@ -1102,8 +1103,8 @@ namespace isic {
             },
             .timestampMs = static_cast<std::uint64_t>(millis()),
             .priority = EventPriority::E_HIGH
-        };
-        (void) m_bus.publish(evt); // TODO: handle publish failure?
+        });
+        (void) m_bus.publish(std::move(evt));  // TODO: check publish result
     }
 
     void OtaService::publishStatusToMqtt() {
@@ -1111,7 +1112,7 @@ namespace isic {
         // This method can be used for on-demand status publishing
 
         const auto state{m_state.load()};
-        const Event evt{
+        auto evt = std::make_unique<Event>(Event{
             .type = EventType::OtaStateChanged,
             .payload = OtaStateChangedEvent{
                 .oldState = static_cast<std::uint8_t>(state),
@@ -1120,8 +1121,8 @@ namespace isic {
                 .timestampMs = static_cast<std::uint64_t>(millis())
             },
             .timestampMs = static_cast<std::uint64_t>(millis())
-        };
-        (void) m_bus.publish(evt); // TODO: handle publish failure?
+        });
+        (void) m_bus.publish(std::move(evt));  // TODO: check publish result
     }
 
     void OtaService::acquireWakeLock() {

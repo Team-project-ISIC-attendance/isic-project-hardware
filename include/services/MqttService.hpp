@@ -148,7 +148,7 @@ namespace isic {
         // Topic helpers
         [[nodiscard]] std::string makeBaseTopic() const;
         [[nodiscard]] std::string topicConfigSet() const;
-        [[nodiscard]] std::string topicConfigStatus() const;
+        [[nodiscard]] std::string topicConfig() const;
         [[nodiscard]] std::string topicOtaSet() const;
         [[nodiscard]] std::string topicOtaStatus() const;
         [[nodiscard]] std::string topicOtaProgress() const;
@@ -157,17 +157,17 @@ namespace isic {
         [[nodiscard]] std::string topicAttendanceBatch() const;
         [[nodiscard]] std::string topicStatus() const;
         [[nodiscard]] std::string topicHealth() const;
-        [[nodiscard]] std::string topicPn532Status() const;
+        [[nodiscard]] std::string topicHealthReport() const;
         [[nodiscard]] std::string topicMetrics() const;
         [[nodiscard]] std::string topicModules() const;
 
         // Publishing helpers
-        void publishStatus(const char* status);
-        void publishHealth(const std::string& healthJson);
+        void handleStatus(std::string_view status);
+        void handleHealth(const HealthStatusChangedEvent& event);
+        void handleHealthReport(const std::string& report);
         void handleAttendanceEvent(const AttendanceRecord& record);
         void handleOtaStateChanged(const OtaStateChangedEvent& event);
         void handleOtaProgress(const OtaProgressEvent& event);
-        void handleHealthReport(const std::string& payload);
 
         // References
         EventBus& m_bus;
