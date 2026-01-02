@@ -1,76 +1,115 @@
-#ifndef HARDWARE_CONFIGSERVICE_HPP
-#define HARDWARE_CONFIGSERVICE_HPP
+#ifndef ISIC_SERVICES_CONFIGSERVICE_HPP
+#define ISIC_SERVICES_CONFIGSERVICE_HPP
 
-/**
- * @file ConfigService.hpp
- * @brief Configuration management service using NVS storage.
- *
- * @note Provides persistent storage and runtime updates for application
- * configuration via ESP32 NVS (Non-Volatile Storage).
- */
-
-#include <Preferences.h>
-
-#include <string>
-
-#include "AppConfig.hpp"
-#include "core/Result.hpp"
+#include "common/Config.hpp"
 #include "core/EventBus.hpp"
+#include "core/IService.hpp"
 
-namespace isic {
-    /**
-     * @brief Configuration management service.
-     *
-     * Responsibilities:
-     * - Load configuration from NVS at boot
-     * - Save configuration changes to NVS
-     * - Parse and apply JSON configuration updates
-     * - Notify other components of configuration changes
-     *
-     * @note Uses Preferences library for NVS access.
-     */
-    class ConfigService : public IEventListener {
-    public:
-        explicit ConfigService(EventBus& bus);
-        ~ConfigService() override = default;
+#include <LittleFS.h>
+#include <ArduinoJson.h>
+#include <vector>
 
-        /**
-         * @brief Initialize the service and load configuration.
-         * @return Status indicating success or failure
-         */
-        [[nodiscard]] Status begin();
+namespace isic
+{
+class ConfigService : public ServiceBase
+{
+public:
+    static constexpr auto *CONFIG_FILE{"/config.json"};
 
-        /**
-         * @brief Get the current configuration (read-only).
-         * @return Reference to the current configuration
-         */
-        [[nodiscard]] const AppConfig& get() const noexcept {
-            return m_config;
-        }
+    explicit ConfigService(EventBus &bus);
+    ~ConfigService() override;
 
-        /**
-         * @brief Update configuration from a JSON string.
-         * @param json JSON configuration string
-         * @return Status indicating success or failure
-         */
-        [[nodiscard]] Status updateFromJson(const std::string& json);
+    ConfigService(const ConfigService &) = delete;
+    ConfigService &operator=(const ConfigService &) = delete;
+    ConfigService(ConfigService &&) = delete;
+    ConfigService &operator=(ConfigService &&) = delete;
 
-        /**
-         * @brief Save current configuration to persistent storage.
-         * @return Status indicating success or failure
-         */
-        [[nodiscard]] Status save();
+    // IService implementation
+    [[nodiscard]] Status begin() override;
+    void loop() override;
+    void end() override;
 
-        void onEvent(const Event& event) override;
+    [[nodiscard]] const Config &get() const
+    {
+        return m_config;
+    }
+    [[nodiscard]] Config &getMutable()
+    {
+        return m_config;
+    }
+    [[nodiscard]] const WiFiConfig &getWifiConfig() const noexcept
+    {
+        return m_config.wifi;
+    }
+    [[nodiscard]] const MqttConfig &getMqttConfig() const noexcept
+    {
+        return m_config.mqtt;
+    }
+    [[nodiscard]] const DeviceConfig &getDeviceConfig() const noexcept
+    {
+        return m_config.device;
+    }
+    [[nodiscard]] const Pn532Config &getPn532Config() const noexcept
+    {
+        return m_config.pn532;
+    }
+    [[nodiscard]] const AttendanceConfig &getAttendanceConfig() const noexcept
+    {
+        return m_config.attendance;
+    }
+    [[nodiscard]] const FeedbackConfig &getFeedbackConfig() const noexcept
+    {
+        return m_config.feedback;
+    }
+    [[nodiscard]] const HealthConfig &getHealthConfig() const noexcept
+    {
+        return m_config.health;
+    }
+    [[nodiscard]] const OtaConfig &getOtaConfig() const noexcept
+    {
+        return m_config.ota;
+    }
+    [[nodiscard]] const PowerConfig &getPowerConfig() const noexcept
+    {
+        return m_config.power;
+    }
 
-    private:
-        Status load();
-        void notifyUpdated() const;
+    [[nodiscard]] Status save();
+    [[nodiscard]] Status saveNow();
+    [[nodiscard]] Status load();
+    [[nodiscard]] Status reset();
+    [[nodiscard]] Status updateFromJson(const char *json);
 
-        EventBus& m_bus;
-        Preferences m_prefs{};
-        AppConfig m_config{};
-    };
-}
+    [[nodiscard]] bool isConfigured() const noexcept
+    {
+        return m_config.isConfigured();
+    }
+    [[nodiscard]] bool isDirty() const noexcept
+    {
+        return m_dirty;
+    }
 
-#endif  // HARDWARE_CONFIGSERVICE_HPP
+private:
+    void handleConfigMessage(const std::string& topic, const std::string& payload);
+
+    bool parseJson(const char *json);
+    bool parseWifiConfig(const JsonVariant &json);
+    bool parseMqttConfig(const JsonVariant &json);
+    bool parseDeviceConfig(const JsonVariant &json);
+    bool parsePn532Config(const JsonVariant &json);
+    bool parseAttendanceConfig(const JsonVariant &json);
+    bool parseFeedbackConfig(const JsonVariant &json);
+    bool parseHealthConfig(const JsonVariant &json);
+    bool parseOtaConfig(const JsonVariant &json);
+    bool parsePowerConfig(const JsonVariant &json);
+
+    EventBus &m_bus;
+    Config m_config{};
+
+    std::vector<EventBus::ScopedConnection> m_eventConnections{};
+
+    bool m_dirty{false};
+};
+} // namespace isic
+
+#endif // ISIC_SERVICES_CONFIGSERVICE_HPP

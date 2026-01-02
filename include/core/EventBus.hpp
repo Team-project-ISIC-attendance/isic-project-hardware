@@ -1,191 +1,173 @@
-#ifndef HARDWARE_EVENTBUS_HPP
-#define HARDWARE_EVENTBUS_HPP
+#ifndef ISIC_CORE_EVENTBUS_HPP
+#define ISIC_CORE_EVENTBUS_HPP
 
+#include "common/Types.hpp"
+#include "core/Signal.hpp"
+
+#include <array>
+
+namespace isic
+{
 /**
- * @file EventBus.hpp
- * @brief High-performance event bus for inter-component communication.
+ * @brief Async Event Bus with publish/subscribe pattern
  *
- * The EventBus provides a thread-safe, priority-aware publish-subscribe
- * system for decoupled component communication on FreeRTOS.
+ * Usage Pattern:
+ * @code
+ * // Initialization
+ * EventBus bus;
+ * bus.subscribe(EventType::WifiConnected, [](const Event& e) {
+ *     // Handle event
+ * });
  *
- * @note Events are heap-allocated and ownership is transferred to the EventBus
- *       when published. The EventBus deletes events after dispatching to all
- *       listeners. This avoids std::string corruption through FreeRTOS queue memcpy.
+ * // Publishing (from anywhere, including ISR)
+ * bus.publish(EventType::WifiConnected);
+ *
+ * // Main loop (REQUIRED)
+ * void loop() {
+ *     bus.dispatch(); // Process all pending events
+ *     // ... other loop tasks
+ * }
+ * @endcode
+ *
+ * @warning dispatch() MUST be called regularly from main loop
  */
+class EventBus
+{
+public:
+    static constexpr auto TAG{"EventBus"};
 
-#include <Arduino.h>
-
-#include <vector>
-#include <memory>
-
-#include "core/Types.hpp"
-
-namespace isic {
-    /**
-     * @brief Event listener interface.
-     *
-     * Components that want to receive events must implement this interface
-     * and register with the EventBus.
-     *
-     * @note All event listeners must implement this interface.
-     */
-    class IEventListener {
-    public:
-        virtual ~IEventListener() = default;
-        virtual void onEvent(const Event& event) = 0;
-    };
+    EventBus() = default;
+    ~EventBus() = default;
 
     /**
-     * @brief Event filter to allow selective event subscription.
-     *
-     * Uses a bitmask for O(1) filtering of up to 64 event types.
-     *
-     * @note All operations are constexpr and noexcept for compile-time optimization.
+     * @brief Scoped connection type for RAII management
      */
-    struct EventFilter {
-        std::uint64_t eventTypeMask{~0ULL};  // Bitmask of EventTypes to receive
-
-        [[nodiscard]] constexpr bool accepts(EventType type) const noexcept {
-            return (eventTypeMask & (1ULL << static_cast<std::uint8_t>(type))) != 0;
-        }
-
-        [[nodiscard]] static constexpr EventFilter all() noexcept {
-            return EventFilter{~0ULL};
-        }
-
-        [[nodiscard]] static constexpr EventFilter none() noexcept {
-            return EventFilter{0};
-        }
-
-        [[nodiscard]] static constexpr EventFilter only(EventType type) noexcept {
-            return EventFilter{1ULL << static_cast<std::uint8_t>(type)};
-        }
-
-        constexpr EventFilter& include(EventType type) noexcept {
-            eventTypeMask |= (1ULL << static_cast<std::uint8_t>(type));
-            return *this;
-        }
-
-        constexpr EventFilter& exclude(EventType type) noexcept {
-            eventTypeMask &= ~(1ULL << static_cast<std::uint8_t>(type));
-            return *this;
-        }
-    };
+    using ScopedConnection = Signal<const Event &>::ScopedConnection;
 
     /**
-     * @brief High-performance EventBus with priority support.
+     * @brief Subscribe to a specific event type
      *
-     * Features:
-     *  - Thread-safe publish-subscribe model
-     *  - Event prioritization (high-priority queue)
-     *  - Listener filtering by event type
-     *  - Configurable queue sizes and task parameters
+     * @param type EventType to listen for
+     * @param callback Function to execute asynchronously when event is dispatched
+     * @return Connection handle for unsubscription
      *
-     * @note Designed for FreeRTOS-based systems.
+     * @note Callback executes later during dispatch(), not immediately on publish()
      */
-    class EventBus {
-    public:
-        using ListenerId = std::uint32_t;
+    [[nodiscard]] Signal<const Event &>::Connection subscribe(const EventType type, Signal<const Event &>::Callback callback)
+    {
+        if (type >= EventType::_Count)
+        {
+            return 0; // Invalid type, no subscription
+        }
+        return m_signals[static_cast<std::size_t>(type)].connect(std::move(callback));
+    }
 
-        /**
-         * @brief Configuration parameters for EventBus.
-         */
-        struct Config {
-            std::uint32_t queueLength{64};
-            std::uint32_t highPriorityQueueLength{16};
-            std::uint32_t taskStackSize{4096};
-            std::uint8_t taskPriority{2};
-            std::uint8_t taskCore{0};
-        };
+    /**
+     * @brief Subscribe and return a scoped connection (auto-unsubscribe on destruction)
+     *
+     * @param type EventType to listen for
+     * @param callback Function to execute asynchronously
+     * @return ScopedConnection for automatic management
+     */
+    [[nodiscard]] ScopedConnection subscribeScoped(const EventType type, Signal<const Event &>::Callback callback)
+    {
+        if (type >= EventType::_Count)
+        {
+            return {}; // Return empty ScopedConnection, no subscription
+        }
+        return m_signals[static_cast<std::size_t>(type)].connectScoped(std::move(callback));
+    }
 
-        explicit EventBus(const Config& cfg);
-        EventBus(const EventBus&) = delete;
-        EventBus& operator=(const EventBus&) = delete;
-        EventBus(EventBus&&) = delete;
-        EventBus& operator=(EventBus&&) = delete;
-        ~EventBus();
-
-        /**
-         * @brief Start the event bus task.
-         */
-        void start();
-
-        /**
-         * @brief Stop the event bus task.
-         */
-        void stop();
-
-        /**
-         * @brief Subscribe a listener to events.
-         * @param listener Pointer to listener
-         * @param filter Optional filter for event types
-         * @return Listener ID for unsubscription
-         */
-        [[nodiscard]] ListenerId subscribe(IEventListener* listener, EventFilter filter = EventFilter::all());
-
-        /**
-         * @brief Unsubscribe a listener.
-         * @param id Listener ID returned from subscribe
-         */
-        void unsubscribe(ListenerId id);
-
-        /**
-         * @brief Publish an event (non-blocking by default).
-         *
-         * Takes ownership of the event via unique_ptr. The EventBus will
-         * automatically clean up the event after dispatching to all listeners.
-         * If queueing fails, the event is cleaned up immediately.
-         *
-         * Usage:
-         *   bus.publish(std::make_unique<Event>(Event{...}));
-         *
-         * @param event unique_ptr to event (ownership transferred)
-         * @param ticksToWait How long to wait if queue is full (0 = non-blocking)
-         * @return true if event was queued
-         */
-        [[nodiscard]] bool publish(std::unique_ptr<Event> event, TickType_t ticksToWait = 0);
-
-        /**
-         * @brief Publish a high-priority event.
-         *
-         * High-priority events are processed before normal events.
-         * Takes ownership of the event via unique_ptr.
-         *
-         * @param event unique_ptr to event (ownership transferred)
-         * @param ticksToWait How long to wait if queue is full (0 = non-blocking)
-         * @return true if event was queued
-         */
-        [[nodiscard]] bool publishHighPriority(std::unique_ptr<Event> event, TickType_t ticksToWait = 0);
-
-        /**
-         * @brief Check if event bus is running.
-         */
-        [[nodiscard]] bool isRunning() const noexcept {
-            return m_running;
+    /**
+     * @brief Unsubscribe from an event
+     *
+     * @param type EventType was subscribed to
+     * @param connection Connection handle returned by subscribe
+     */
+    void unsubscribe(const EventType type, const Signal<const Event &>::Connection connection)
+    {
+        if (type >= EventType::_Count)
+        {
+            return; // Invalid type, nothing to unsubscribe
         }
 
-    private:
-        static void eventTaskThunk(void* arg);
-        void eventTask();
+        m_signals[static_cast<std::size_t>(type)].disconnect(connection);
+    }
 
-        bool dispatchEvent(const Event& event);
+    /**
+     * @brief Publish an event for async dispatch
+     *
+     * @param event The event object to publish
+     * @return true if queued successfully, false if buffer full
+     *
+     * @note Does NOT invoke subscribers immediately - call dispatch() to process
+     * @note Safe from ISR, callbacks, or any execution context
+     *
+     * @warning ESP8266 ISR: Event must be lightweight (no heap allocation in copy)
+     */
+    bool publish(const Event &event)
+    {
+        if (event.eventType >= EventType::_Count)
+        {
+            return false; // Invalid event type
+        }
+        return m_signals[static_cast<std::size_t>(event.eventType)].publish(event);
+    }
 
-        struct Subscriber {
-            ListenerId id{0};
-            IEventListener* listener{nullptr};
-            EventFilter filter{EventFilter::all()};
-        };
+    /**
+     * @brief Helper to publish simple event type without data
+     *
+     * @param type Event type to publish
+     * @return true if queued successfully
+     */
+    bool publish(const EventType type)
+    {
+        return publish(Event(type));
+    }
 
-        std::vector<Subscriber> m_listeners{};
+    /**
+     * @brief Dispatch all pending events to subscribers
+     *
+     * @return Total number of events dispatched across all types
+     *
+     * @note Call this from loop() or main task
+     * @note Deterministic execution time (processes all pending, then returns)
+     * @note Safe to call publish() from within callbacks (queued for next dispatch)
+     */
+    std::size_t dispatch()
+    {
+        std::size_t totalDispatched{0};
 
-        ListenerId m_nextId{1};
-        QueueHandle_t m_queue{nullptr};
-        QueueHandle_t m_highPriorityQueue{nullptr};
-        TaskHandle_t m_taskHandle{nullptr};
-        SemaphoreHandle_t m_listenersMutex{nullptr};
-        Config m_config{};
-        volatile bool m_running{false};
-    };
-}  // namespace isic
+        for (auto &signal: m_signals)
+        {
+            totalDispatched += signal.dispatch();
+        }
 
-#endif  // HARDWARE_EVENTBUS_HPP
+        return totalDispatched;
+    }
+
+    /**
+     * @brief Get total pending events across all types
+     *
+     * @return Number of events awaiting dispatch
+     *
+     * @note Useful for monitoring event bus saturation
+     */
+    [[nodiscard]] std::size_t pendingCount() const
+    {
+        std::size_t total{0};
+
+        for (const auto &signal: m_signals)
+        {
+            total += signal.pendingCount();
+        }
+
+        return total;
+    }
+
+private:
+    std::array<Signal<const Event &>, static_cast<std::size_t>(EventType::_Count)> m_signals;
+};
+}
+
+#endif // ISIC_CORE_EVENTBUS_HPP

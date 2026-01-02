@@ -1,14 +1,11 @@
-# ISIC Attendance System — ESP32 Hardware Firmware
+# ISIC Attendance System — ESP8266 Firmware
 
 <div align="center">
 
-![C++20](https://img.shields.io/badge/C++-20-00599C?style=flat&logo=c%2B%2B)
+![C++17](https://img.shields.io/badge/C++-17-00599C?style=flat&logo=c%2B%2B)
 ![PlatformIO](https://img.shields.io/badge/PlatformIO-6.x-orange?style=flat&logo=platformio)
-![ESP32](https://img.shields.io/badge/ESP32-Supported-green?style=flat&logo=espressif)
-![ESP8266](https://img.shields.io/badge/ESP8266-Supported-green?style=flat&logo=espressif)
+![ESP8266](https://img.shields.io/badge/ESP8266-ESP12E-green?style=flat&logo=espressif)
 ![License](https://img.shields.io/badge/License-Proprietary-red)
-
-**Production-grade embedded firmware for ISIC card-based attendance tracking with NFC, MQTT, OTA updates, and power management.**
 
 </div>
 
@@ -17,38 +14,23 @@
 ## Table of Contents
 
 - [Overview](#overview)
-- [Features](#features)
 - [Architecture](#architecture)
   - [System Diagram](#system-diagram)
   - [Design Patterns](#design-patterns)
-  - [EventBus (Observer Pattern)](#eventbus-observer-pattern)
-  - [Module System (Strategy Pattern)](#module-system-strategy-pattern)
-  - [State Machine Pattern](#state-machine-pattern)
+  - [EventBus (Signal/Slot Pattern)](#eventbus-signalslot-pattern)
+  - [Service System](#service-system)
 - [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
   - [Hardware Setup](#hardware-setup)
   - [Building & Flashing](#building--flashing)
-- [Target Platforms](#target-platforms)
-  - [ESP32 Development Kit](#esp32-development-kit)
-  - [ESP-12F (ESP8266)](#esp-12f-esp8266)
-  - [Conditional Compilation](#conditional-compilation)
 - [Configuration](#configuration)
   - [Configuration Structure](#configuration-structure)
-  - [NVS Persistent Storage](#nvs-persistent-storage)
+  - [LittleFS Persistent Storage](#littlefs-persistent-storage)
   - [Runtime Configuration via MQTT](#runtime-configuration-via-mqtt)
 - [MQTT Protocol](#mqtt-protocol)
   - [Topic Structure](#topic-structure)
-  - [Subscriptions (Device Listens)](#subscriptions-device-listens)
-  - [Publications (Device Publishes)](#publications-device-publishes)
   - [Message Formats](#message-formats)
 - [OTA Updates](#ota-updates)
-  - [Partition Layout](#partition-layout)
-  - [OTA State Machine](#ota-state-machine)
-  - [OTA Commands](#ota-commands)
-  - [Boot Validation & Rollback](#boot-validation--rollback)
-- [Power Management](#power-management)
-- [Health Monitoring](#health-monitoring)
-- [Code Style & Standards](#code-style--standards)
 - [Project Structure](#project-structure)
 - [License](#license)
 
@@ -56,30 +38,18 @@
 
 ## Overview
 
-This firmware implements a complete attendance tracking system for ESP32/ESP8266 microcontrollers. When an ISIC card is presented to the NFC reader, the system records the attendance event, batches multiple events for efficiency, and publishes them to an MQTT broker. The firmware is designed for production deployments with features like OTA updates, automatic rollback, power management, and comprehensive health monitoring.
+This firmware implements a complete attendance tracking system for **ESP8266 (ESP-12F)** microcontrollers. When an ISIC card is presented to the PN532 NFC reader, the system records the attendance event, batches multiple events for efficiency, and publishes them to an MQTT broker.
 
 ### Key Capabilities
 
 | Capability | Description |
 |------------|-------------|
-| **NFC Card Reading** | PN532-based ISIC card scanning with interrupt-driven wake |
-| **MQTT Integration** | Async publishing with offline buffering and backpressure |
-| **Power Management** | Light/deep sleep with wake-lock mechanism |
-| **OTA Updates** | Dual-partition updates with automatic rollback |
-| **Health Monitoring** | Real-time component health tracking and reporting |
-| **Event-Driven** | Central EventBus for decoupled communication |
-
----
-
-## Features
-
-- **High Throughput**: Non-blocking design handles 120+ cards/minute
-- **Offline Resilience**: 256-event buffer for network outages
-- **Smart Batching**: Configurable batching reduces MQTT overhead by 10x
-- **Debouncing**: Prevents duplicate scans (configurable 2s default)
-- **Wake-on-Card**: PN532 interrupt wakes ESP32 from sleep
-- **Exponential Backoff**: Graceful recovery from network failures
-- **Metrics & Telemetry**: Real-time performance monitoring
+| **NFC Card Reading** | PN532-based ISIC card scanning via SPI |
+| **MQTT Integration** | Async publishing with offline buffering |
+| **OTA Updates** | Web-based OTA via ElegantOTA |
+| **Health Monitoring** | Real-time component health tracking |
+| **Event-Driven** | Central EventBus with Signal/Slot pattern |
+| **Cooperative Multitasking** | TaskScheduler for non-blocking operation |
 
 ---
 
@@ -91,46 +61,43 @@ This firmware implements a complete attendance tracking system for ESP32/ESP8266
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              APPLICATION LAYER                              │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐          │
-│  │AttendanceModule │    │   OtaModule     │    │  (Future Mods)  │          │
-│  │  • Debounce     │    │  • MQTT handler │    │                 │          │
-│  │  • Validation   │    │  • State mgmt   │    │                 │          │
-│  └────────┬────────┘    └────────┬────────┘    └────────┬────────┘          │
-│           │                      │                      │                   │
-│           └──────────────────────┼──────────────────────┘                   │
-│                                  ▼                                          │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                           ModuleManager                               │  │
-│  │            Lifecycle management • Event routing • Config updates      │  │
+│  │                                App                                    │  │
+│  │         Main coordinator • Service lifecycle • Task setup             │  │
 │  └───────────────────────────────────┬───────────────────────────────────┘  │
 ├──────────────────────────────────────┼──────────────────────────────────────┤
 │                              SERVICE LAYER                                  │
 ├──────────────────────────────────────┼──────────────────────────────────────┤
 │                                      ▼                                      │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                             EventBus                                  │  │
-│  │     Thread-safe pub/sub • Priority queues • O(1) event filtering      │  │
+│  │                           EventBus                                    │  │
+│  │           Signal/Slot pub/sub • Type-safe events • RAII connections   │  │
 │  └───────────────────────────────────┬───────────────────────────────────┘  │
-│           ┌──────────────┬───────────┼───────────┬──────────────┐           │
-│           ▼              ▼           ▼           ▼              ▼           │
-│  ┌─────────────┐ ┌─────────────┐ ┌────────┐ ┌─────────┐ ┌─────────────────┐ │
-│  │ConfigService│ │ MqttService │ │  OTA   │ │ Power   │ │HealthMonitor    │ │
-│  │ • NVS load  │ │ • Async pub │ │Service │ │ Service │ │ • Component     │ │
-│  │ • Validation│ │ • Reconnect │ │        │ │ • Sleep │ │   tracking      │ │
-│  │ • Events    │ │ • Queue     │ │        │ │ • Wake  │ │ • Reporting     │ │
-│  └─────────────┘ └─────────────┘ └────────┘ └─────────┘ └─────────────────┘ │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                              DRIVER LAYER                                   │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                          Pn532Driver                                │    │
-│  │   SPI communication • IRQ handling • Health checks • Error recovery │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
+│          ┌───────────┬───────────┬───┴───┬───────────┬───────────┐          │
+│          ▼           ▼           ▼       ▼           ▼           ▼          │
+│  ┌─────────────┐ ┌─────────┐ ┌────────┐ ┌─────────┐ ┌─────────┐ ┌────────┐  │
+│  │ConfigService│ │  WiFi   │ │  MQTT  │ │   OTA   │ │PN532    │ │Feedback│  │
+│  │• LittleFS   │ │ Service │ │Service │ │ Service │ │Service  │ │Service │  │
+│  │• JSON parse │ │• AP mode│ │• Queue │ │• Elegant│ │• SPI    │ │• LED   │  │
+│  └─────────────┘ └─────────┘ └────────┘ └─────────┘ └─────────┘ └────────┘  │
+│          │                       │           │           │                  │
+│          ▼                       ▼           ▼           ▼                  │
+│  ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐  │
+│  │  AttendanceService  │  │    HealthService    │  │    PowerService     │  │
+│  │  • Debounce/batch   │  │  • Component checks │  │  • Sleep modes      │  │
+│  │  • Offline buffer   │  │  • MQTT reporting   │  │  • Signal-based     │  │
+│  └─────────────────────┘  └─────────────────────┘  └─────────────────────┘  │
+│                                                                             │
+│                           ┌─────────────────────┐                           │
+│                           │   TaskScheduler     │                           │
+│                           │  • Cooperative      │                           │
+│                           │  • Non-blocking     │                           │
+│                           └─────────────────────┘                           │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                              HARDWARE LAYER                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐       │
-│  │   SPI    │  │   WiFi   │  │   NVS    │  │   GPIO   │  │  Flash   │       │
+│  │   SPI    │  │   WiFi   │  │ LittleFS │  │   GPIO   │  │  Flash   │       │
 │  │  (PN532) │  │ (MQTT)   │  │ (Config) │  │(LED/Buzz)│  │  (OTA)   │       │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘       │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -138,102 +105,90 @@ This firmware implements a complete attendance tracking system for ESP32/ESP8266
 
 ### Design Patterns
 
-The firmware employs several well-established design patterns optimized for embedded systems:
-
 | Pattern | Implementation | Purpose |
 |---------|---------------|---------|
-| **Observer** | `EventBus` + `IEventListener` | Decoupled event-driven communication |
-| **Strategy** | `IModule` + `ModuleManager` | Pluggable functionality modules |
-| **State Machine** | `OtaService`, `PowerService` | Complex state transitions |
-| **Singleton** | Global service instances | Shared resources (EventBus, Config) |
-| **RAII** | `ScopedWakeLock` | Resource management without exceptions |
-| **Template Method** | `ModuleBase` | Common module lifecycle |
+| **Signal/Slot** | `Signal<T>` + `EventBus` | Decoupled event-driven communication |
+| **Service Base** | `IService` + `ServiceBase` | Common service lifecycle |
+| **Cooperative Tasks** | `TaskScheduler` | Non-blocking multitasking |
+| **RAII** | `ScopedConnection` | Auto-unsubscribe on destruction |
 
 ---
 
-### EventBus (Observer Pattern)
+### EventBus (Signal/Slot Pattern)
 
-The `EventBus` is the central nervous system of the firmware, implementing a **thread-safe publish-subscribe** pattern with priority support.
+The `EventBus` is the central nervous system using a **type-safe Signal/Slot pattern** with per-event-type signals.
 
 #### How It Works
 
 ```
-┌──────────────┐     publish()      ┌──────────────┐     dispatch()     ┌──────────────┐
+┌──────────────┐     publish()      ┌──────────────┐     emit()          ┌──────────────┐
 │   Producer   │ ─────────────────► │   EventBus   │ ─────────────────► │  Subscriber  │
-│  (PN532Drv)  │                    │              │                    │ (Attendance) │
+│ (Pn532Svc)   │                    │              │                    │ (AttendSvc)  │
 └──────────────┘                    │  ┌────────┐  │                    └──────────────┘
-                                    │  │ Queue  │  │                    ┌──────────────┐
-                                    │  │(Normal)│  │ ─────────────────► │  Subscriber  │
-                                    │  └────────┘  │                    │    (MQTT)    │
-                                    │  ┌────────┐  │                    └──────────────┘
-                                    │  │ Queue  │  │                    ┌──────────────┐
-                                    │  │ (High) │  │ ─────────────────► │  Subscriber  │
-                                    │  └────────┘  │                    │   (Health)   │
-                                    └──────────────┘                    └──────────────┘
+                                    │  │Signal  │  │                    ┌──────────────┐
+                                    │  │[Card   │  │ ─────────────────► │  Subscriber  │
+                                    │  │Scanned]│  │                    │  (Feedback)  │
+                                    │  └────────┘  │                    └──────────────┘
+                                    │      ...     │
+                                    │  Signal per  │
+                                    │  EventType   │
+                                    └──────────────┘
 ```
 
 #### Key Features
 
-- **Dual Priority Queues**: High-priority events (errors, OTA) processed first
-- **Bitmask Filtering**: O(1) event type filtering with `EventFilter`
-- **Thread-Safe**: FreeRTOS mutex protection for subscriber list
-- **Non-Blocking**: Configurable queue timeout (default: immediate return)
+- **Per-Type Signals**: One `Signal<const Event&>` per `EventType` for O(1) dispatch
+- **RAII Connections**: `ScopedConnection` auto-disconnects on destruction
+- **Type-Safe**: Strong typing via `std::variant` payloads
+- **Memory Efficient**: Fixed-size array of signals, no dynamic allocation
 
 #### Usage Example
 
 ```cpp
-// 1. Implement IEventListener
-class MyComponent : public IEventListener {
-public:
-    void onEvent(const Event& event) override {
-        if (event.type == EventType::CardScanned) {
-            auto& payload = std::get<CardScannedEvent>(event.payload);
-            // Handle card scan...
-        }
-    }
-};
+// 1. Subscribe to events
+auto conn = eventBus.subscribe(EventType::CardScanned, 
+    [this](const Event& event) {
+        auto& cardEvent = std::get<CardEvent>(event.data);
+        handleCard(cardEvent);
+    });
 
-// 2. Subscribe with optional filter
-EventFilter filter = EventFilter::none()
-    .include(EventType::CardScanned)
-    .include(EventType::MqttConnected);
-
-auto id = eventBus.subscribe(&myComponent, filter);
+// 2. Or use scoped connection (auto-unsubscribe)
+auto scopedConn = eventBus.subscribeScoped(EventType::MqttConnected,
+    [this](const Event& event) {
+        onMqttConnected();
+    });
 
 // 3. Publish events
-Event event{
+eventBus.publish(Event{
     .type = EventType::CardScanned,
-    .payload = CardScannedEvent{.cardId = cardId, .timestampMs = millis()},
-    .timestampMs = millis(),
-    .priority = EventPriority::E_NORMAL
-};
-eventBus.publish(event);
+    .data = CardEvent{.uid = cardUid, .uidLength = len, .timestampMs = millis()}
+});
 
-// 4. High-priority events skip the normal queue
-eventBus.publishHighPriority(criticalEvent);
+// 4. Helper for simple events
+eventBus.publish(EventType::MqttConnected);
 ```
 
 #### Event Types
 
-The system defines 30+ event types organized by domain:
-
 | Domain | Events |
 |--------|--------|
-| **Card/Attendance** | `CardScanned`, `CardReadError`, `AttendanceRecorded`, `AttendanceBatchReady` |
-| **MQTT** | `MqttConnected`, `MqttDisconnected`, `MqttMessageReceived`, `MqttQueueOverflow` |
-| **OTA** | `OtaRequested`, `OtaStateChanged`, `OtaProgress`, `OtaVersionInfo` |
-| **PN532** | `Pn532StatusChanged`, `Pn532Error`, `Pn532Recovered`, `Pn532CardPresent` |
-| **Power** | `PowerStateChanged`, `SleepEntering`, `WakeupOccurred`, `WakeLockAcquired` |
-| **Health** | `HealthStatusChanged`, `HighLoadDetected`, `QueueOverflow` |
-| **System** | `Heartbeat`, `SystemError`, `SystemWarning`, `ModuleStateChanged` |
+| **System** | `SystemReady`, `SystemError`, `ConfigUpdated`, `Heartbeat` |
+| **WiFi** | `WiFiConnected`, `WiFiDisconnected`, `WiFiApStarted` |
+| **MQTT** | `MqttConnected`, `MqttDisconnected`, `MqttMessage` |
+| **NFC** | `CardScanned`, `CardError`, `NfcReady`, `NfcError` |
+| **Attendance** | `AttendanceRecorded`, `AttendanceBatchReady` |
+| **OTA** | `OtaStarted`, `OtaProgress`, `OtaCompleted`, `OtaError` |
+| **Health** | `HealthChanged` |
+| **Feedback** | `FeedbackRequest` |
+| **Power** | `PowerStateChange`, `SleepRequested`, `WakeupOccurred` |
 
 ---
 
-### Module System (Strategy Pattern)
+### Service System
 
-Modules are the primary extension point for adding new functionality. The `IModule` interface defines a clear lifecycle with event handling.
+All services implement `IService` and optionally `IHealthReporter`. The `ServiceBase` class provides common functionality.
 
-#### Module Lifecycle
+#### Service Lifecycle
 
 ```
                     ┌─────────────────┐
@@ -242,129 +197,35 @@ Modules are the primary extension point for adding new functionality. The `IModu
                              │ begin()
                              ▼
                     ┌─────────────────┐
-                    │   Initialized   │
+                    │   Initializing  │
                     └────────┬────────┘
-                             │ start()
+                             │ success
                              ▼
-┌──────────┐        ┌─────────────────┐        ┌──────────┐
-│ Starting │◄───────│     Running     │───────►│ Stopping │
-└──────────┘        └─────────────────┘        └──────────┘
-                             │                        │
-                             │ error                  │ stop()
-                             ▼                        ▼
-                    ┌─────────────────┐        ┌──────────┐
-                    │      Error      │        │  Stopped │
-                    └─────────────────┘        └──────────┘
+                    ┌─────────────────┐
+                    │     Running     │ ◄── loop() called by Task
+                    └────────┬────────┘
+                             │ end() / error
+                             ▼
+                ┌────────────┴────────────┐
+                ▼                         ▼
+        ┌──────────┐              ┌──────────┐
+        │  Stopped │              │   Error  │
+        └──────────┘              └──────────┘
 ```
 
-#### Creating a Custom Module
+#### Services Overview
 
-```cpp
-class MyModule : public ModuleBase, public IHealthCheck {
-public:
-    explicit MyModule(EventBus& bus) : ModuleBase(bus) {}
-
-    // Required: Module metadata
-    ModuleInfo getInfo() const override {
-        return {
-            .name = "MyModule",
-            .version = "1.0.0",
-            .description = "Does something useful",
-            .enabledByDefault = true,
-            .priority = 5  // Higher = started first
-        };
-    }
-
-    // Required: Health check interface
-    HealthStatus getHealth() const override {
-        return {.state = HealthState::Healthy, .message = "OK"};
-    }
-    std::string_view getComponentName() const override { return "MyModule"; }
-    bool performHealthCheck() override { return true; }
-
-protected:
-    // Lifecycle hooks
-    void onStart() override {
-        // Initialize resources, start tasks
-    }
-
-    void onStop() override {
-        // Cleanup resources, stop tasks
-    }
-
-    // Event handling (called only when Running)
-    void onEvent(const Event& event) override {
-        switch (event.type) {
-            case EventType::CardScanned:
-                handleCardScan(std::get<CardScannedEvent>(event.payload));
-                break;
-            // ...
-        }
-    }
-
-    // Configuration updates
-    void onConfigUpdate(const AppConfig& config) override {
-        // Apply new configuration
-    }
-};
-```
-
-#### Registering Modules
-
-```cpp
-// In main.cpp setup()
-g_moduleManager = new ModuleManager(*g_eventBus);
-g_moduleManager->addModule(*g_attendanceModule);
-g_moduleManager->addModule(*g_otaModule);
-g_moduleManager->addModule(*g_myModule);  // Add your module
-
-// Start all modules in priority order
-g_moduleManager->startAll();
-```
-
----
-
-### State Machine Pattern
-
-Complex components use explicit state machines for predictable behavior:
-
-#### OTA State Machine
-
-```
-┌────────┐  check   ┌──────────┐  url valid  ┌─────────────┐
-│  Idle  │─────────►│ Checking │────────────►│ Downloading │
-└────────┘          └──────────┘             └──────┬──────┘
-    ▲                    │                          │
-    │                    │ no update                │ complete
-    │                    ▼                          ▼
-    │               ┌──────────┐             ┌───────────┐
-    │               │  Failed  │◄────────────│ Verifying │
-    │               └──────────┘   error     └─────┬─────┘
-    │                    │                         │ valid
-    │                    │ retry                   ▼
-    │                    │                   ┌──────────┐
-    │                    │                   │ Applying │
-    │                    │                   └────┬─────┘
-    │                    │                        │
-    └────────────────────┴────────────────────────┘
-                                            ┌───────────┐
-                                            │ Completed │──► restart
-                                            └───────────┘
-```
-
-#### Power State Machine
-
-```
-┌────────┐  idle timeout  ┌──────┐  deeper sleep  ┌───────────┐
-│ Active │───────────────►│ Idle │───────────────►│LightSleep │
-└────────┘                └──────┘                └─────┬─────┘
-    ▲                         ▲                         │
-    │                         │                         │ extended idle
-    │ wake event              │ activity               ▼
-    │                         │                   ┌───────────┐
-    └─────────────────────────┴───────────────────│ DeepSleep │
-                                                  └───────────┘
-```
+| Service | Responsibility |
+|---------|----------------|
+| **ConfigService** | Load/save JSON config from LittleFS |
+| **WiFiService** | Station + AP mode, captive portal |
+| **MqttService** | MQTT client with queue and reconnect |
+| **OtaService** | ElegantOTA web-based updates |
+| **Pn532Service** | NFC card reading via SPI |
+| **AttendanceService** | Card debounce, batching, offline buffer |
+| **FeedbackService** | LED blink and buzzer patterns |
+| **HealthService** | Aggregate and report component health |
+| **PowerService** | Sleep modes, signal-based power management |
 
 ---
 
@@ -372,42 +233,28 @@ Complex components use explicit state machines for predictable behavior:
 
 ### Prerequisites
 
-| Requirement | Version | Notes |
-|-------------|---------|-------|
-| **PlatformIO** | 6.x | CLI or VS Code extension |
-| **Python** | 3.8+ | For PlatformIO |
-| **ESP32 Board** | Any | ESP32-DevKit recommended |
-| **PN532 Module** | — | SPI mode required |
-| **MQTT Broker** | Any | Mosquitto, HiveMQ, etc. |
+| Requirement       | Version | Notes |
+|-------------------|---------|-------|
+| **PlatformIO**    | 6.x | CLI or VS Code extension |
+| **Python**        | 3.8+ | For PlatformIO |
+| **ESP-12F Board** | — | NodeMCU or similar |
+| **PN532 Module**  | — | SPI mode required |
+| **MQTT Broker**   | Any | Mosquitto, HiveMQ, etc. |
 
 ### Hardware Setup
 
-#### Pin Configuration (ESP32)
+#### Pin Configuration (ESP8266)
 
 | Signal | GPIO | PN532 Pin | Notes |
 |--------|------|-----------|-------|
-| SPI SCK | 18 | SCK | Clock |
-| SPI MISO | 19 | MISO | Data from PN532 |
-| SPI MOSI | 23 | MOSI | Data to PN532 |
-| SPI SS | 5 | SS | Chip select |
-| IRQ | 4 | IRQ | Wake interrupt |
-| RST | 5 | RSTPDN | Hardware reset |
-
-#### Wiring Diagram
-
-```
-ESP32                          PN532
-┌──────────┐                  ┌──────────┐
-│      3V3 │──────────────────│ VCC      │
-│      GND │──────────────────│ GND      │
-│   GPIO18 │──────────────────│ SCK      │
-│   GPIO19 │──────────────────│ MISO     │
-│   GPIO23 │──────────────────│ MOSI     │
-│    GPIO5 │──────────────────│ SS       │
-│    GPIO4 │──────────────────│ IRQ      │
-│    GPIO5 │──────────────────│ RSTPDN   │
-└──────────┘                  └──────────┘
-```
+| SPI SCK | 14 (D5) | SCK | Clock |
+| SPI MISO | 12 (D6) | MISO | Data from PN532 |
+| SPI MOSI | 13 (D7) | MOSI | Data to PN532 |
+| SPI SS | 15 (D8) | SS | Chip select |
+| IRQ | 5 (D1) | IRQ | Card detect |
+| RST | 4 (D2) | RSTPDN | Hardware reset |
+| LED | 2 | — | Built-in LED (active LOW) |
+| Buzzer | 14 (D5) | — | PWM output |
 
 ### Building & Flashing
 
@@ -416,91 +263,20 @@ ESP32                          PN532
 git clone https://github.com/your-org/isic-project-hardware.git
 cd isic-project-hardware
 
-# Build for ESP32 (default)
-pio run -e esp32dev
-
-# Build for ESP8266
-pio run -e esp12f
+# Build for ESP8266 (default)
+pio run
 
 # Upload to connected device
-pio run -e esp32dev -t upload
+pio run -t upload
 
 # Monitor serial output
 pio device monitor
 
-# Build + Upload + Monitor (one command)
-pio run -e esp32dev -t upload -t monitor
+# Build + Upload + Monitor
+pio run -t upload -t monitor
 
-# Clean build artifacts
-pio run -t clean
-```
-
----
-
-## Target Platforms
-
-### ESP32 Development Kit
-
-**Environment**: `esp32dev`
-
-```ini
-[env:esp32dev]
-platform = espressif32
-board = esp32dev
-board_build.partitions = partitions_ota_esp32.csv
-
-build_flags =
-    -std=gnu++20
-    -DHW_TARGET_ESP32
-    -DCORE_DEBUG_LEVEL=ARDUHAL_LOG_LEVEL_DEBUG
-```
-
-**Features**:
-- Dual-core FreeRTOS (240MHz)
-- 4MB Flash with OTA partitions
-- Full feature set enabled
-- Debug logging enabled
-
-### ESP-12F (ESP8266)
-
-**Environment**: `esp12f`
-
-```ini
-[env:esp12f]
-platform = espressif8266
-board = esp12e
-board_build.flash_size = 4MB
-board_build.ldscript = eagle.flash.4m1m.ld
-
-build_flags =
-    -std=gnu++20
-    -DHW_TARGET_ESP8266
-    -DPROD_BUILD
-    -DCORE_DEBUG_LEVEL=ARDUHAL_LOG_LEVEL_ERROR
-```
-
-**Features**:
-- Single-core (80MHz)
-- 4MB Flash, 1MB SPIFFS
-- Production optimizations
-- Reduced logging
-
-### Conditional Compilation
-
-Use preprocessor macros for platform-specific code:
-
-```cpp
-#ifdef HW_TARGET_ESP32
-    // ESP32-specific
-#elif defined(HW_TARGET_ESP8266)
-    // ESP8266-specific
-#endif
-
-#ifdef PROD_BUILD
-    // Production
-#else
-    // Development
-#endif
+# Debug build
+pio run -e esp8266_debug
 ```
 
 ---
@@ -509,96 +285,36 @@ Use preprocessor macros for platform-specific code:
 
 ### Configuration Structure
 
-All configuration is centralized in `AppConfig.hpp`:
+All configuration is centralized in `AppConfig.hpp`.
 
-```cpp
-struct AppConfig {
-    WifiConfig wifi;           // SSID, password, timeouts
-    MqttConfig mqtt;           // Broker, topics, queue settings
-    DeviceConfig device;       // Device ID, location, firmware version
-    AttendanceConfig attendance; // Debounce, batching, buffers
-    OtaConfig ota;             // Update settings, validation
-    Pn532Config pn532;         // Pins, polling, health checks
-    PowerConfig power;         // Sleep modes, wake sources
-    FeedbackConfig feedback;   // LED/buzzer settings
-    HealthConfig health;       // Check intervals, thresholds
-    EventBusConfig eventBus;   // Queue sizes, task settings
-    LogConfig log;             // Log levels, formatting
-    ModulesConfig modules;     // Enable/disable modules
-};
-```
+### LittleFS Persistent Storage
 
-### NVS Persistent Storage
-
-Configuration is stored in ESP32's Non-Volatile Storage (NVS) and loaded at boot:
-
-```cpp
-// ConfigService handles NVS operations
-ConfigService configService(eventBus);
-configService.begin();  // Loads from NVS or creates defaults
-
-// Access current config
-const AppConfig& config = configService.get();
-
-// Update and persist
-AppConfig newConfig = config;
-newConfig.attendance.debounceMs = 3000;
-configService.update(newConfig);  // Saves to NVS + publishes ConfigUpdated event
-```
+Configuration is stored in LittleFS as `/config.json` and loaded at boot.
 
 ### Runtime Configuration via MQTT
 
-Publish to `device/<device_id>/config/set`:
+Publish to `<base_topic>/<device_id>/config/set`:
 
 ```json
 {
   "wifi": {
-    "ssid": "ProductionNetwork",
-    "password": "secure_password_123",
-    "connectTimeoutMs": 15000,
-    "maxRetries": 10
+    "ssid": "NetworkSSID",
+    "password": "password123"
   },
   "mqtt": {
-    "broker": "mqtt.production.example.com",
-    "port": 8883,
-    "username": "device_user",
-    "password": "mqtt_secret",
-    "tls": true,
-    "keepAliveSeconds": 30,
-    "outboundQueueSize": 128
+    "broker": "mqtt.example.com",
+    "port": 1883,
+    "username": "user",
+    "password": "pass"
   },
   "device": {
-    "deviceId": "isic-esp32-building-a-001",
-    "locationId": "building-a-entrance"
+    "deviceId": "isic-esp8266-001",
+    "locationId": "building-a"
   },
   "attendance": {
-    "debounceMs": 2500,
-    "offlineBufferSize": 512,
-    "batchingEnabled": true,
-    "batchMaxSize": 20,
-    "batchFlushIntervalMs": 5000
-  },
-  "pn532": {
-    "pollIntervalMs": 50,
-    "healthCheckIntervalMs": 10000,
-    "maxConsecutiveErrors": 3
-  },
-  "power": {
-    "sleepEnabled": true,
-    "sleepType": "light",
-    "idleTimeoutMs": 60000,
-    "wakeSourcePn532Enabled": true
-  },
-  "health": {
-    "checkIntervalMs": 30000,
-    "reportIntervalMs": 120000,
-    "publishToMqtt": true
-  },
-  "ota": {
-    "enabled": true,
-    "autoCheck": true,
-    "checkIntervalMs": 3600000,
-    "requireHttps": true
+    "debounceMs": 2000,
+    "batchMaxSize": 10,
+    "batchFlushIntervalMs": 30000
   }
 }
 ```
@@ -609,150 +325,51 @@ Publish to `device/<device_id>/config/set`:
 
 ### Topic Structure
 
-All topics follow the pattern: `device/<device_id>/<resource>[/<action>]`
+All topics follow: `<base_topic>/<device_id>/<resource>[/<action>]`
 
 ```
-device/
-└── isic-esp32-001/
-    ├── status              # Online/offline (retained)
-    ├── attendance          # Single card events
-    ├── attendance/batch    # Batched events
-    ├── config/
-    │   └── set             # Configuration commands
-    ├── ota/
-    │   ├── set             # OTA commands
-    │   ├── status          # OTA state (retained)
-    │   ├── progress        # Download progress
-    │   └── error           # Error messages
-    ├── status/
-    │   ├── health          # Health reports
-    │   └── pn532           # NFC reader status
-    ├── metrics             # Performance metrics
-    └── modules/
-        └── +/set           # Module commands
+<base_topic>/
+└── isic-esp8266-001/
+    ├── status              # Online/offline (LWT)
+    ├── attendance          # Card events (always array format)
+    ├── config/set/#        # Configuration commands (subscribe)
+    ├── health              # Health reports
+    └── ota/status          # OTA state
 ```
-
-### Subscriptions (Device Listens)
-
-| Topic | Description | QoS |
-|-------|-------------|-----|
-| `device/<id>/config/set` | Configuration updates | 1 |
-| `device/<id>/ota/set` | OTA commands | 1 |
-| `device/<id>/modules/+/set` | Module-specific commands | 0 |
-
-### Publications (Device Publishes)
-
-| Topic | Description | Retained | QoS |
-|-------|-------------|----------|-----|
-| `device/<id>/status` | Online/offline LWT | Yes | 1 |
-| `device/<id>/attendance` | Single card scan | No | 0 |
-| `device/<id>/attendance/batch` | Batched scans | No | 1 |
-| `device/<id>/status/health` | Health report | No | 0 |
-| `device/<id>/status/pn532` | NFC status | No | 0 |
-| `device/<id>/ota/status` | OTA state | Yes | 1 |
-| `device/<id>/ota/progress` | Download % | No | 0 |
-| `device/<id>/ota/error` | Error details | No | 1 |
-| `device/<id>/metrics` | System metrics | No | 0 |
 
 ### Message Formats
 
-#### Attendance Event (Single)
+#### Attendance Event (Single Card)
 
 ```json
-{
-  "card_id": "04A5B7C8D9E0F1",
-  "timestamp_ms": 1699876543210,
-  "device_id": "isic-esp32-001",
-  "location_id": "building-a-room-101",
-  "sequence": 42
-}
+[
+  {
+    "uid": "04A5B7C8D9E0F1",
+    "ts": 1699876543210,
+    "ts_source": "unix_ms",
+    "seq": 1
+  }
+]
 ```
 
-#### Attendance Batch
-
-```json
-{
-  "batch_id": "b_1699876543",
-  "device_id": "isic-esp32-001",
-  "location_id": "building-a-room-101",
-  "count": 5,
-  "first_timestamp_ms": 1699876540000,
-  "last_timestamp_ms": 1699876543210,
-  "records": [
-    {"card_id": "04A5B7C8D9E0F1", "timestamp_ms": 1699876540000, "sequence": 40},
-    {"card_id": "04B6C8D9E0F213", "timestamp_ms": 1699876541000, "sequence": 41},
-    {"card_id": "04C7D9E0F11425", "timestamp_ms": 1699876542000, "sequence": 42},
-    {"card_id": "04D8E0F1152536", "timestamp_ms": 1699876542500, "sequence": 43},
-    {"card_id": "04E9F1A2163647", "timestamp_ms": 1699876543210, "sequence": 44}
-  ]
-}
-```
+> [!NOTE]
+> The `attendance` topic always uses the same array format. Single scans produce an array with one record, batched scans produce an array with multiple records.
+> `ts` is Unix ms when NTP time is available; otherwise it falls back to uptime milliseconds and `ts_source` is set to `"uptime_ms"`.
 
 #### Health Report
 
 ```json
 {
   "overall": "healthy",
-  "uptime_s": 86400,
-  "free_heap_kb": 180,
-  "min_heap_kb": 145,
-  "device_id": "isic-esp32-001",
+  "uptimeS": 86400,
+  "freeHeapKb": 30,
+  "deviceId": "isic-esp8266-001",
   "firmware": "1.0.0",
-  "wifi_rssi": -65,
-  "counts": {
-    "healthy": 4,
-    "degraded": 0,
-    "unhealthy": 0,
-    "unknown": 0
-  },
   "components": [
-    {"name": "MQTT", "state": "healthy", "message": "Connected"},
-    {"name": "PN532", "state": "healthy", "message": "Ready"},
-    {"name": "Attendance", "state": "healthy", "message": "Processing"},
-    {"name": "OTA", "state": "healthy", "message": "Idle"}
+    {"name": "WiFi", "state": "healthy"},
+    {"name": "MQTT", "state": "healthy"},
+    {"name": "PN532", "state": "healthy"}
   ]
-}
-```
-
-#### OTA Status
-
-```json
-{
-  "old_state": "idle",
-  "new_state": "downloading",
-  "message": "Downloading firmware v1.2.3...",
-  "timestamp_ms": 1699876543210,
-  "device_id": "isic-esp32-001",
-  "firmware_version": "1.0.0",
-  "target_version": "1.2.3"
-}
-```
-
-#### OTA Progress
-
-```json
-{
-  "percent": 45,
-  "bytes_downloaded": 512000,
-  "total_bytes": 1138688,
-  "remaining_bytes": 626688,
-  "speed_bps": 48000,
-  "eta_seconds": 13,
-  "success": false,
-  "message": "Downloading: 45%",
-  "device_id": "isic-esp32-001"
-}
-```
-
-#### OTA Error
-
-```json
-{
-  "error": "checksum_mismatch",
-  "message": "SHA256 verification failed: expected abc123..., got def456...",
-  "timestamp_ms": 1699876543210,
-  "device_id": "isic-esp32-001",
-  "recoverable": true
 }
 ```
 
@@ -760,300 +377,359 @@ device/
 
 ## OTA Updates
 
-### Partition Layout
+The firmware uses **ElegantOTA** for web-based over-the-air updates.
 
-The ESP32 uses a dual-partition OTA scheme for safe updates:
+### Access OTA Interface
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                        4MB Flash Layout                            │
-├──────────────┬──────────────┬───────────┬──────────────────────────┤
-│   Offset     │  Partition   │   Size    │      Description         │
-├──────────────┼──────────────┼───────────┼──────────────────────────┤
-│   0x9000     │     nvs      │   20 KB   │ Non-volatile storage     │
-│   0xE000     │   otadata    │    8 KB   │ OTA boot selection       │
-│  0x10000     │    app0      │ 1.25 MB   │ OTA slot 0 (ota_0)       │
-│ 0x150000     │    app1      │ 1.25 MB   │ OTA slot 1 (ota_1)       │
-│ 0x290000     │   spiffs     │  1.4 MB   │ Filesystem               │
-└──────────────┴──────────────┴───────────┴──────────────────────────┘
-```
+1. Connect to device WiFi or ensure device is on same network
+2. Navigate to `http://<device_ip>/update`
+3. Upload `.bin` firmware file
+4. Device reboots automatically after successful update
 
-### OTA State Machine
+### OTA via AsyncWebServer
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        OTA Update Flow                              │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│   ┌────────┐                                                        │
-│   │  Idle  │◄────────────────────────────────────────────┐          │
-│   └───┬────┘                                             │          │
-│       │ update cmd                                       │          │
-│       ▼                                                  │          │
-│   ┌──────────┐  no update   ┌────────┐                   │          │
-│   │ Checking │─────────────►│ Failed │───────────────────┤          │
-│   └────┬─────┘              └────────┘                   │          │
-│        │ update available                                │          │
-│        ▼                                                 │          │
-│   ┌─────────────┐                                        │          │
-│   │ Downloading │────────────────────────────────────────┤          │
-│   │             │  timeout/error                         │          │
-│   └──────┬──────┘                                        │          │
-│          │ complete                                      │          │
-│          ▼                                               │          │
-│   ┌───────────┐                                          │          │
-│   │ Verifying │──────────────────────────────────────────┤          │
-│   │           │  checksum fail                           │          │
-│   └─────┬─────┘                                          │          │
-│         │ valid                                          │          │
-│         ▼                                                │          │
-│   ┌──────────┐                                           │          │
-│   │ Applying │───────────────────────────────────────────┘          │
-│   │          │  partition error                                     │
-│   └────┬─────┘                                                      │
-│        │ success                                                    │
-│        ▼                                                            │
-│   ┌───────────┐                                                     │
-│   │ Completed │──────► ESP.restart()                                │
-│   └───────────┘                                                     │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### OTA Commands
-
-Publish to `device/<device_id>/ota/set`:
-
-#### Trigger Update
-
-```json
-{
-  "action": "update",
-  "url": "https://releases.example.com/firmware/v1.2.3.bin",
-  "version": "1.2.3",
-  "sha256": "a1b2c3d4e5f6789...",
-  "force": false
-}
-```
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `action` | Yes | Must be `"update"` |
-| `url` | Yes | HTTPS URL of firmware binary |
-| `version` | No | Target version for comparison |
-| `sha256` | No | Expected SHA256 hash (64 hex chars) |
-| `force` | No | Skip version check if `true` |
-
-#### Other Commands
-
-```json
-// Check for updates
-{ "action": "check" }
-
-// Cancel in-progress update
-{ "action": "cancel" }
-
-// Rollback to previous firmware
-{ "action": "rollback" }
-
-// Mark current partition as valid
-{ "action": "mark_valid" }
-
-// Get current status
-{ "action": "get_status" }
-```
-
-### Boot Validation & Rollback
-
-After OTA, the new firmware boots in "pending validation" state:
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Post-OTA Boot Sequence                          │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌─────────────┐                                                    │
-│  │  New Boot   │                                                    │
-│  │  (Pending)  │                                                    │
-│  └──────┬──────┘                                                    │
-│         │                                                           │
-│         ├───────────────────┬─────────────────────┐                 │
-│         │                   │                     │                 │
-│         ▼                   ▼                     ▼                 │
-│  ┌─────────────┐    ┌─────────────┐      ┌─────────────┐            │
-│  │ WiFi OK?    │    │ MQTT OK?    │      │ 30s stable? │            │
-│  └──────┬──────┘    └──────┬──────┘      └──────┬──────┘            │
-│         │                  │                    │                   │
-│         └──────────────────┴────────────────────┘                   │
-│                             │                                       │
-│              ┌──────────────┴──────────────┐                        │
-│              │                             │                        │
-│              ▼ All pass                    ▼ Any fail               │
-│     ┌─────────────────┐           ┌─────────────────┐               │
-│     │  Mark Valid     │           │ Auto Rollback   │               │
-│     │ (Partition OK)  │           │ (Previous FW)   │               │
-│     └─────────────────┘           └─────────────────┘               │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-**Validation Criteria** (configurable):
-1. WiFi connection established
-2. MQTT broker connected
-3. No critical errors for 30 seconds
-4. Or manual `mark_valid` command received
-
-### CLI Examples
-
-```bash
-# Trigger OTA update
-mosquitto_pub -h mqtt.example.com \
-  -t "device/isic-esp32-001/ota/set" \
-  -m '{"action":"update","url":"https://releases.example.com/v1.2.3.bin","version":"1.2.3"}'
-
-# Monitor OTA status
-mosquitto_sub -h mqtt.example.com \
-  -t "device/isic-esp32-001/ota/status" -v
-
-# Watch download progress
-mosquitto_sub -h mqtt.example.com \
-  -t "device/isic-esp32-001/ota/progress" -v
-
-# Emergency rollback
-mosquitto_pub -h mqtt.example.com \
-  -t "device/isic-esp32-001/ota/set" \
-  -m '{"action":"rollback"}'
-```
+The OTA service runs on port 80 alongside the AsyncWebServer for configuration.
 
 ---
 
 ## Power Management
 
+The firmware includes a comprehensive power management system for battery-powered deployments, targeting ~0.2mA in deep sleep.
+
 ### Sleep Modes
 
-| Mode | Power | Wake Latency | RAM | Use Case |
-|------|-------|--------------|-----|----------|
-| **Active** | ~100mA | — | Full | Processing |
-| **Light Sleep** | ~0.8mA | ~1ms | Retained | Idle waiting |
-| **Deep Sleep** | ~10µA | ~200ms | Lost | Extended idle |
+| Mode | Current | WiFi | CPU | Use Case |
+|------|---------|------|-----|----------|
+| **Active** | ~80mA | On | Running | Normal operation |
+| **Light Sleep** | ~2mA | Associated | Paused | Brief idle periods |
+| **Modem Sleep** | ~15mA | RF Off | Running | Processing without network |
+| **Deep Sleep** | ~0.2mA | Off | Off | Long idle periods |
 
-### Wake Sources
+### Signal-Based Architecture
 
-1. **PN532 Interrupt**: Card presented to NFC reader
-2. **Timer**: Periodic wake for health checks
-3. **GPIO**: External button/sensor
-4. **Touch**: Capacitive touch pins
+PowerService uses **EventBus signals** for decoupled power management:
 
-### Wake Lock API
+```
+PowerService ──(PowerStateChange)──► EventBus
+                                        │
+                    ┌───────────────────┼───────────────────┐
+                    ▼                   ▼                   ▼
+             WiFiService         Pn532Service        (other services)
+                    │                   │
+                    ▼                   ▼
+        enterPowerSleep()         enterSleep()
+        wakeFromPowerSleep()      wakeup()
+```
 
-Services acquire wake locks to prevent sleep during critical operations:
+Each service subscribes to `PowerStateChange` and manages its own power state.
+
+### Hardware Requirements
+
+| Connection | Purpose |
+|------------|--------|
+| **GPIO16 (D0) → RST** | Required for timer-based deep sleep wakeup |
+| **PN532 IRQ → RST** | Optional, for NFC card wakeup from deep sleep |
+
+### Usage Example
 
 ```cpp
-// RAII-style (recommended)
+// Request deep sleep for 5 minutes
+app.getPowerService().requestSleep(PowerState::DeepSleep, 300000);
+
+// Enter modem sleep (WiFi off, CPU running)
+app.getPowerService().enterModemSleep();
+
+// Wake from modem sleep
+app.getPowerService().wakeFromModemSleep();
+
+// Check wakeup reason after deep sleep
+WakeupReason reason = app.getPowerService().getLastWakeupReason();
+if (reason == WakeupReason::External) {
+    // Woken by PN532 card detection or button
+}
+```
+
+### Smart Sleep System
+
+PowerService implements an intelligent power management system that automatically selects the optimal sleep mode based on activity patterns, network state, and estimated idle duration.
+
+#### How Smart Sleep Works
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                      SMART SLEEP DECISION FLOW                       │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  1. ACTIVITY TRACKING (Configurable via activityTypeMask)            │
+│     ┌────────────────────────────────────────────────────┐           │
+│     │ Event Type      │ Bitmask │ Resets Idle Timer?     │           │
+│     ├─────────────────┼─────────┼────────────────────────┤           │
+│     │ CardScanned     │ 0b00001 │ ✓ (default enabled)    │           │
+│     │ MqttMessage     │ 0b00010 │ ✓ (default enabled)    │           │
+│     │ WifiConnected   │ 0b00100 │ ✓ (default enabled)    │           │
+│     │ MqttConnected   │ 0b01000 │ ✗ (default disabled)   │           │
+│     │ NfcReady        │ 0b10000 │ ✗ (default disabled)   │           │
+│     └────────────────────────────────────────────────────┘           │
+│     Default mask: 0b00111 (Card, MQTT msg, WiFi)                     │
+│                                                                      │
+│  2. IDLE TIMEOUT CHECK (when autoSleepEnabled = true)                │
+│     ┌────────────────────────────────────────────────────┐           │
+│     │  if (millis() - lastActivity > idleTimeoutMs)      │           │
+│     │      → Trigger smart sleep selection               │           │
+│     └────────────────────────────────────────────────────┘           │
+│                                                                      │
+│  3. SLEEP DEPTH SELECTION (if smartSleepEnabled = true)              │
+│     ┌────────────────────────────────────────────────────┐           │
+│     │  Estimated Idle Duration < 30s?                    │           │
+│     │      → LIGHT SLEEP                                 │           │
+│     │                                                    │           │
+│     │  Estimated Idle Duration 30s - 5m?                 │           │
+│     │      MQTT Connected?                               │           │
+│     │          YES → LIGHT SLEEP                         │           │
+│     │          NO  → MODEM SLEEP (save power)            │           │
+│     │                                                    │           │
+│     │  Estimated Idle Duration > 5m?                     │           │
+│     │      Safe to deep sleep? (no pending ops)          │           │
+│     │          YES → DEEP SLEEP                          │           │
+│     │          NO  → MODEM SLEEP                         │           │
+│     └────────────────────────────────────────────────────┘           │
+│                                                                      │
+│  4. NETWORK-AWARE SLEEP (if modemSleepOnMqttDisconnect = true)       │
+│     ┌────────────────────────────────────────────────────┐           │
+│     │  MQTT Disconnected detected                        │           │
+│     │      → Auto-enter MODEM SLEEP                      │           │
+│     │      → Wake on MQTT reconnect                      │           │
+│     │      → Duration: modemSleepDurationMs (30s)        │           │
+│     └────────────────────────────────────────────────────┘           │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+#### State Machine Architecture
+
+PowerService follows the same event-driven architecture as MqttService:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     POWERSERVICE STATE MACHINE                      │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Uninitialized                                                      │
+│       │                                                             │
+│       │ begin()                                                     │
+│       ▼                                                             │
+│  Initializing ─────────────► (detect wakeup, load RTC, check       │
+│       │                       chained sleep)                        │
+│       │                                                             │
+│       ▼                                                             │
+│  Ready ◄────────────┐        (waiting for dependencies)            │
+│   │                 │                                               │
+│   │                 │ WiFi Disconnected                             │
+│   │                 │                                               │
+│   │ WiFi Connected  │                                               │
+│   │ autoSleepEnabled│                                               │
+│   ▼                 │                                               │
+│  Running ───────────┘        (active power management)             │
+│   │                                                                 │
+│   ├─► Idle Timeout Check                                           │
+│   │   └─► Smart Sleep Selection                                    │
+│   │                                                                 │
+│   └─► Network-Aware Check                                          │
+│       └─► Auto Modem Sleep if MQTT down                            │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### Non-Blocking Sleep Operations
+
+All sleep modes (except deep sleep) are **non-blocking** and async:
+
+```cpp
+// Light Sleep - Non-blocking with timer
+void enterLightSleepAsync(uint32_t durationMs) {
+    lightSleepActive_ = true;
+    lightSleepStartMs_ = millis();
+    lightSleepDurationMs_ = durationMs;
+    // loop() checks elapsed time and wakes up
+}
+
+// Modem Sleep - Non-blocking with timer
+void enterModemSleepAsync(uint32_t durationMs) {
+    modemSleepActive_ = true;
+    modemSleepStartMs_ = millis();
+    modemSleepDurationMs_ = durationMs;
+    WiFi.setSleep(WIFI_MODEM_SLEEP);
+    // loop() wakes after duration or MQTT reconnect
+}
+
+// Deep Sleep - Blocking (device resets on wakeup)
+void enterDeepSleepAsync(uint32_t durationMs) {
+    prepareForSleep(PowerState::DeepSleep);
+    saveToRtcMemory();  // Persist metrics
+    ESP.deepSleep(durationMs * 1000);  // Device resets
+}
+```
+
+#### Event-Driven Dependencies
+
+PowerService tracks WiFi and MQTT readiness through events:
+
+```cpp
+// Subscribe to WiFi events
+bus_.subscribeScoped(EventType::WifiConnected, [this](const Event&) {
+    wifiReady_ = true;
+    if (autoSleepEnabled && m_state == ServiceState::Ready)
+        setState(ServiceState::Running);
+});
+
+// Subscribe to MQTT events
+bus_.subscribeScoped(EventType::MqttConnected, [this](const Event&) {
+    mqttReady_ = true;
+    // Wake from modem sleep if active
+    if (modemSleepActive_)
+        wakeFromModemSleep();
+});
+
+bus_.subscribeScoped(EventType::MqttDisconnected, [this](const Event&) {
+    mqttReady_ = false;
+    // Network-aware: enter modem sleep to save power
+});
+```
+
+#### PN532 IRQ-Based Wakeup
+
+When `enableNfcWakeup` is enabled, the PN532 can wake the ESP from deep sleep:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    IRQ WAKEUP MECHANISM                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. PowerService enters deep sleep                             │
+│     ├─► Save metrics to RTC memory                             │
+│     ├─► Publish PowerStateChange(DeepSleep)                    │
+│     └─► ESP.deepSleep(duration)                                │
+│                                                                 │
+│  2. Pn532Service receives PowerStateChange                     │
+│     ├─► Put PN532 into sleep mode (10µA)                       │
+│     ├─► Enable RF field detection wakeup                       │
+│     └─► Configure IRQ pin to trigger on card                   │
+│                                                                 │
+│  3. Card enters NFC field                                      │
+│     ├─► PN532 detects RF field                                 │
+│     ├─► PN532 triggers IRQ pin                                 │
+│     └─► ESP wakes from deep sleep (device reset)               │
+│                                                                 │
+│  4. PowerService.begin() after wakeup                          │
+│     ├─► Detect wakeup reason (External = IRQ)                  │
+│     ├─► Restore metrics from RTC memory                        │
+│     ├─► Publish WakeupOccurred(External)                       │
+│     └─► Resume normal operation                                │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+Hardware Connection: PN532 IRQ → ESP GPIO (configured in nfcWakeupPin)
+Power Draw in Sleep: ~0.2mA (ESP) + ~10µA (PN532) ≈ 0.21mA total
+```
+
+#### Power Metrics
+
+PowerService tracks comprehensive metrics across sleep cycles:
+
+```cpp
+struct PowerServiceMetrics {
+    // Sleep cycle tracking
+    uint32_t lightSleepCycles{0};
+    uint32_t modemSleepCycles{0};
+    uint32_t deepSleepCycles{0};
+
+    // Duration tracking
+    uint32_t totalLightSleepMs{0};
+    uint32_t totalModemSleepMs{0};
+    uint32_t totalDeepSleepMs{0};     // Survives deep sleep via RTC
+
+    // Smart decision tracking
+    uint32_t idleTimeoutsTriggered{0};
+    uint32_t smartSleepDecisions{0};
+    uint32_t networkAwareSleeps{0};   // Auto modem sleep on MQTT down
+    uint32_t wakeupCount{0};          // Survives deep sleep via RTC
+};
+```
+
+### Configuration
+
+```cpp
+struct PowerConfig {
+    // Basic power management
+    bool enabled{true};
+    uint32_t deepSleepDurationMs{300000};    // 5 minutes
+    uint32_t lightSleepDurationMs{10000};    // 10 seconds
+    uint32_t idleTimeoutMs{60000};           // Auto-sleep after idle
+    bool autoSleepEnabled{false};
+    bool enableNfcWakeup{true};
+    uint8_t nfcWakeupPin{5};                 // GPIO5 (D1)
+
+    // Smart sleep management
+    bool smartSleepEnabled{true};
+    bool modemSleepOnMqttDisconnect{true};
+    uint32_t modemSleepDurationMs{30000};            // 30 seconds
+    uint32_t smartSleepShortThresholdMs{30000};      // <30s = light
+    uint32_t smartSleepMediumThresholdMs{300000};    // <5m = modem/light
+
+    // Activity tracking (bitmask: Card|MQTT|WiFi|MqttConn|NfcReady)
+    uint8_t activityTypeMask{0b00111};               // Default: Card + MQTT msg + WiFi
+};
+```
+
+#### Configuration Examples
+
+**Minimal Power (Battery Optimized)**
+```json
 {
-    ScopedWakeLock lock(powerService, "mqtt_publish");
-    // Device won't sleep while lock exists
-    mqttService.publishSync(topic, payload);
-}  // Lock released automatically
-
-// Manual style
-auto lockId = powerService.requestWakeLock("ota_download");
-// ... long operation ...
-powerService.releaseWakeLock(lockId);
+  "power": {
+    "autoSleepEnabled": true,
+    "smartSleepEnabled": true,
+    "idleTimeoutMs": 30000,
+    "modemSleepOnMqttDisconnect": true,
+    "activityTypeMask": 1,
+    "enableNfcWakeup": true
+  }
+}
 ```
+- Only card scans reset idle timer (mask = 0b00001)
+- Enter modem sleep when MQTT down
+- Auto deep sleep after 30s idle
+- Wake on card detection via IRQ
 
----
-
-## Health Monitoring
-
-### Component States
-
-| State | Description | Action |
-|-------|-------------|--------|
-| `healthy` | Operating normally | None |
-| `degraded` | Functional with issues | Monitor |
-| `unhealthy` | Not functional | Alert/Recover |
-| `unknown` | State not determined | Initialize |
-
-### Health Check Interface
-
-```cpp
-class IHealthCheck {
-public:
-    virtual HealthStatus getHealth() const = 0;
-    virtual std::string_view getComponentName() const = 0;
-    virtual bool performHealthCheck() = 0;
-};
-
-struct HealthStatus {
-    HealthState state{HealthState::Unknown};
-    std::string message{};
-    std::uint64_t lastCheckMs{0};
-};
+**Maximum Responsiveness (Mains Powered)**
+```json
+{
+  "power": {
+    "autoSleepEnabled": false,
+    "smartSleepEnabled": false,
+    "activityTypeMask": 31
+  }
+}
 ```
+- No automatic sleep
+- All events tracked (mask = 0b11111)
+- Always active for instant response
 
-### Registered Components
-
-- **MqttService**: Connection state, queue depth
-- **Pn532Driver**: Communication status, error rate
-- **AttendanceModule**: Processing state, buffer usage
-- **OtaService**: Update state, partition health
-
----
-
-## Code Style & Standards
-
-### Language Standard
-
-- **C++20** (`-std=gnu++20`) — No C++23 features
-- Custom `Result<T>` instead of `std::expected`
-- Embedded-safe subset of STL
-
-### Coding Conventions
-
-```cpp
-// 4-space indentation
-// Opening braces on same line
-// snake_case for variables
-// PascalCase for types
-// m_ prefix for members
-// Brace initialization {}
-
-class MyService {
-public:
-    explicit MyService(EventBus& bus);
-
-    [[nodiscard]] Status begin(const AppConfig& cfg);
-    [[nodiscard]] bool isReady() const noexcept { return m_ready; }
-
-private:
-    EventBus& m_bus;
-    bool m_ready{false};
-    std::uint32_t m_counter{0};
-};
+**Balanced (Default)**
+```json
+{
+  "power": {
+    "autoSleepEnabled": true,
+    "smartSleepEnabled": true,
+    "idleTimeoutMs": 60000,
+    "modemSleepOnMqttDisconnect": true,
+    "activityTypeMask": 7
+  }
+}
 ```
-
-### C++20 Features Used
-
-| Feature | Usage |
-|---------|-------|
-| `std::uint8_t`, `std::uint32_t` | Fixed-width integers |
-| `enum class` | Type-safe enumerations |
-| `std::span` | Buffer views |
-| `std::optional` | Nullable values |
-| `std::variant` | Event payloads |
-| `std::string_view` | Non-owning strings |
-| `constexpr` | Compile-time constants |
-| `[[nodiscard]]` | Enforced return checking |
-| `noexcept` | Exception specification |
-
-### Embedded Constraints
-
-- Exceptions disabled (`-fno-exceptions`)
-- Minimal heap in hot paths
-- `std::array` over `std::vector`
-- Static/stack allocation for services
-- No `<thread>`, `<filesystem>`, `<future>`
+- Card scans, MQTT messages, WiFi events reset timer (mask = 0b00111)
+- Smart sleep selection based on duration and network state
+- Network-aware modem sleep when MQTT disconnected
 
 ---
 
@@ -1062,55 +738,77 @@ private:
 ```
 isic-project-hardware/
 ├── include/
-│   ├── AppConfig.hpp              # All configuration structures
+│   ├── App.hpp                 # Main application coordinator
+│   ├── AppConfig.hpp           # Configuration structures
 │   ├── core/
-│   │   ├── EventBus.hpp           # Pub/sub event system
-│   │   ├── Types.hpp              # Events, payloads, enums
-│   │   ├── IHealthCheck.hpp       # Health monitoring interface
-│   │   ├── IModule.hpp            # Module interface + base class
-│   │   ├── ModuleManager.hpp      # Module lifecycle management
-│   │   ├── Logger.hpp             # Logging macros
-│   │   └── Result.hpp             # Error handling (Result<T>)
-│   ├── drivers/
-│   │   └── Pn532Driver.hpp        # NFC driver with health
-│   ├── modules/
-│   │   ├── AttendanceModule.hpp   # Card processing module
-│   │   └── OtaModule.hpp          # OTA command handler
+│   │   ├── EventBus.hpp        # Central event system
+│   │   ├── IService.hpp        # Service interfaces
+│   │   ├── Logger.hpp          # Logging utilities
+│   │   ├── PlatformMutex.hpp   # Platform-agnostic mutex
+│   │   ├── Signal.hpp          # Signal/Slot implementation
+│   │   ├── Tagged.hpp          # CRTP tag mixin
+│   │   └── Types.hpp           # Type definitions & events
 │   └── services/
-│       ├── AttendanceBatcher.hpp  # Event batching
-│       ├── ConfigService.hpp      # NVS configuration
-│       ├── HealthMonitorService.hpp
-│       ├── MqttService.hpp        # Async MQTT client
-│       ├── OtaService.hpp         # OTA state machine
-│       ├── PowerService.hpp       # Sleep/wake management
-│       └── UserFeedbackService.hpp # LED/buzzer
+│       ├── AttendanceService.hpp
+│       ├── ConfigService.hpp
+│       ├── FeedbackService.hpp
+│       ├── HealthService.hpp
+│       ├── MqttService.hpp
+│       ├── OtaService.hpp
+│       ├── Pn532Service.hpp
+│       ├── PowerService.hpp
+│       └── WiFiService.hpp
 ├── src/
-│   ├── main.cpp                   # Entry point, initialization
-│   ├── core/
-│   │   ├── EventBus.cpp
-│   │   └── ModuleManager.cpp
-│   ├── drivers/
-│   │   └── Pn532Driver.cpp
-│   ├── modules/
-│   │   ├── AttendanceModule.cpp
-│   │   └── OtaModule.cpp
-│   └── services/
-│       ├── AttendanceBatcher.cpp
-│       ├── ConfigService.cpp
-│       ├── HealthMonitorService.cpp
-│       ├── MqttService.cpp
-│       ├── OtaService.cpp
-│       ├── PowerService.cpp
-│       └── UserFeedbackService.cpp
-├── platformio.ini                 # Build configuration
-├── partitions_ota_esp32.csv       # Flash partition layout
+│   ├── main.cpp                # Entry point
+│   ├── App.cpp                 # Application implementation
+│   └── services/               # Service implementations
+├── platformio.ini              # PlatformIO configuration
 └── README.md
+```
+
+---
+
+## Dependencies
+
+| Library | Version | Purpose |
+|---------|---------|---------|
+| [TaskScheduler](https://github.com/arkhipenko/TaskScheduler) | ^3.7.0 | Cooperative multitasking |
+| [Adafruit PN532](https://github.com/adafruit/Adafruit-PN532) | ^1.3.4 | NFC reader driver |
+| [ArduinoJson](https://github.com/bblanchon/ArduinoJson) | ^7.2.0 | JSON parsing |
+| [PubSubClient](https://github.com/knolleary/pubsubclient) | ^2.8.0 | MQTT client |
+| [ElegantOTA](https://github.com/ayushsharma82/ElegantOTA) | ^3.1.6 | OTA updates |
+| [ESPAsyncWebServer](https://github.com/me-no-dev/ESPAsyncWebServer) | ^1.2.4 | Async HTTP server |
+
+---
+
+## Build Environments
+
+### esp8266 (Production)
+
+```ini
+[env:esp8266]
+platform = espressif8266@4.2.1
+board = esp12e
+board_build.f_cpu = 160000000L
+build_flags = 
+    -std=gnu++2a
+    -DISIC_PLATFORM_ESP8266
+```
+
+### esp8266_debug (Development)
+
+```ini
+[env:esp8266_debug]
+extends = env:esp8266
+build_flags = 
+    ${env:esp8266.build_flags}
+    -DISIC_DEBUG=1
+    -DDEBUG_ESP_PORT=Serial
+build_type = debug
 ```
 
 ---
 
 ## License
 
-**Proprietary** — ISIC Attendance System Project
-
-© 2025 All Rights Reserved
+Proprietary. All rights reserved.

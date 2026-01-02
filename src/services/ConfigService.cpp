@@ -1,445 +1,740 @@
 #include "services/ConfigService.hpp"
 
-#include "core/Logger.hpp"
+#include "common/Logger.hpp"
 
-#include <memory>
-#include <ArduinoJson.h>
+namespace isic
+{
+namespace
+{
+bool endsWith(const std::string &str, const char *suffix) noexcept
+{
+    const auto suffixLen{strlen(suffix)};
 
-namespace isic {
-    namespace {
-        constexpr auto *CONFIG_SERVICE_TAG{"ConfigService"};
-        constexpr auto *PREF_NAMESPACE{"isic"};
-        constexpr auto *PREF_KEY_CONFIG{"config"};
+    if (str.length() < suffixLen)
+    {
+        return false;
     }
 
-    ConfigService::ConfigService(EventBus &bus) : m_bus(bus) {
-        (void) m_bus.subscribe(this); // TODO: handle unsubscription on destruction if needed
+    return str.compare(str.length() - suffixLen, suffixLen, suffix) == 0;
+}
+
+bool parseString(const JsonVariant &json, const char *key, std::string &target)
+{
+    if (json[key].is<const char *>())
+    {
+        target = json[key].as<const char *>();
+        return true;
     }
 
-    Status ConfigService::begin() {
-        if (!m_prefs.begin(PREF_NAMESPACE, false)) {
-            LOG_ERROR(CONFIG_SERVICE_TAG, "Failed to open NVS namespace");
-            m_config = AppConfig::makeDefault();
-            return Status::Error(ErrorCode::StorageError, "NVS open failed");
-        }
+    return false;
+}
 
-        if (const auto status = load(); !status.ok()) {
-            LOG_WARNING(CONFIG_SERVICE_TAG, "Load failed, using defaults");
-            m_config = AppConfig::makeDefault();
-            (void) save(); // TODO: Attempt to save defaults
-        }
-
-        notifyUpdated();
-        return Status::OK();
+template<typename T>
+bool parseNumber(const JsonVariant &json, const char *key, T &target)
+{
+    if (json[key].is<T>())
+    {
+        target = json[key].as<T>();
+        return true;
     }
 
-    Status ConfigService::load() {
-        const auto json{m_prefs.getString(PREF_KEY_CONFIG, "")};
+    return false;
+}
 
-        if (json.isEmpty()) {
-            LOG_INFO(CONFIG_SERVICE_TAG, "No config stored in NVS, using defaults");
-            m_config = AppConfig::makeDefault();
-            return Status::OK();
-        }
-
-        JsonDocument doc{};
-        if (const auto err = deserializeJson(doc, json); err) {
-            LOG_ERROR(CONFIG_SERVICE_TAG, "JSON parse error: %s", err.c_str());
-            return Status::Error(ErrorCode::JsonError, "Deserialize failed");
-        }
-
-        auto cfg = AppConfig::makeDefault();
-        const auto root = doc.as<JsonObject>();
-
-        // WiFi
-        if (const auto wifi = root["wifi"].as<JsonObjectConst>()) {
-            cfg.wifi.ssid = wifi["ssid"] | cfg.wifi.ssid;
-            cfg.wifi.password = wifi["password"] | cfg.wifi.password;
-            cfg.wifi.connectTimeoutMs = wifi["connectTimeoutMs"] | cfg.wifi.connectTimeoutMs;
-            cfg.wifi.maxRetries = wifi["maxRetries"] | cfg.wifi.maxRetries;
-        }
-
-        // MQTT
-        if (const auto mqtt = root["mqtt"].as<JsonObjectConst>()) {
-            cfg.mqtt.broker = mqtt["broker"] | cfg.mqtt.broker;
-            cfg.mqtt.port = mqtt["port"] | cfg.mqtt.port;
-            cfg.mqtt.username = mqtt["username"] | cfg.mqtt.username;
-            cfg.mqtt.password = mqtt["password"] | cfg.mqtt.password;
-            cfg.mqtt.baseTopic = mqtt["baseTopic"] | cfg.mqtt.baseTopic;
-            cfg.mqtt.tls = mqtt["tls"] | cfg.mqtt.tls;
-            cfg.mqtt.keepAliveSeconds = mqtt["keepAliveSeconds"] | cfg.mqtt.keepAliveSeconds;
-            cfg.mqtt.reconnectBackoffMinMs = mqtt["reconnectBackoffMinMs"] | cfg.mqtt.reconnectBackoffMinMs;
-            cfg.mqtt.reconnectBackoffMaxMs = mqtt["reconnectBackoffMaxMs"] | cfg.mqtt.reconnectBackoffMaxMs;
-            cfg.mqtt.outboundQueueSize = mqtt["outboundQueueSize"] | cfg.mqtt.outboundQueueSize;
-        }
-
-        // Device
-        if (const auto device = root["device"].as<JsonObjectConst>()) {
-            cfg.device.deviceId = device["deviceId"] | cfg.device.deviceId;
-            cfg.device.locationId = device["locationId"] | cfg.device.locationId;
-            cfg.device.firmwareVersion = device["firmwareVersion"] | cfg.device.firmwareVersion;
-        }
-
-        // Attendance
-        if (const auto att = root["attendance"].as<JsonObjectConst>()) {
-            cfg.attendance.debounceMs = att["debounceMs"] | cfg.attendance.debounceMs;
-            cfg.attendance.offlineBufferSize = att["offlineBufferSize"] | cfg.attendance.offlineBufferSize;
-            cfg.attendance.eventQueueSize = att["eventQueueSize"] | cfg.attendance.eventQueueSize;
-            cfg.attendance.queueHighWatermark = att["queueHighWatermark"] | cfg.attendance.queueHighWatermark;
-        }
-
-        // OTA
-        if (const auto ota = root["ota"].as<JsonObjectConst>()) {
-            cfg.ota.autoCheck = ota["autoCheck"] | cfg.ota.autoCheck;
-            cfg.ota.checkIntervalMs = ota["checkIntervalMs"] | cfg.ota.checkIntervalMs;
-            cfg.ota.updateServerUrl = ota["updateServerUrl"] | cfg.ota.updateServerUrl;
-            cfg.ota.requireHttps = ota["requireHttps"] | cfg.ota.requireHttps;
-        }
-
-        // PN532
-        if (const auto pn532 = root["pn532"].as<JsonObjectConst>()) {
-            cfg.pn532.irqPin = pn532["irqPin"] | cfg.pn532.irqPin;
-            cfg.pn532.resetPin = pn532["resetPin"] | cfg.pn532.resetPin;
-            cfg.pn532.pollIntervalMs = pn532["pollIntervalMs"] | cfg.pn532.pollIntervalMs;
-            cfg.pn532.cardReadTimeoutMs = pn532["cardReadTimeoutMs"] | cfg.pn532.cardReadTimeoutMs;
-            cfg.pn532.healthCheckIntervalMs = pn532["healthCheckIntervalMs"] | cfg.pn532.healthCheckIntervalMs;
-            cfg.pn532.communicationTimeoutMs = pn532["communicationTimeoutMs"] | cfg.pn532.communicationTimeoutMs;
-            cfg.pn532.maxConsecutiveErrors = pn532["maxConsecutiveErrors"] | cfg.pn532.maxConsecutiveErrors;
-            cfg.pn532.recoveryDelayMs = pn532["recoveryDelayMs"] | cfg.pn532.recoveryDelayMs;
-            cfg.pn532.maxRecoveryAttempts = pn532["maxRecoveryAttempts"] | cfg.pn532.maxRecoveryAttempts;
-            cfg.pn532.wakeOnCardEnabled = pn532["wakeOnCardEnabled"] | cfg.pn532.wakeOnCardEnabled;
-        }
-
-        // Power
-        if (const auto power = root["power"].as<JsonObjectConst>()) {
-            cfg.power.sleepEnabled = power["sleepEnabled"] | cfg.power.sleepEnabled;
-            cfg.power.idleTimeoutMs = power["idleTimeoutMs"] | cfg.power.idleTimeoutMs;
-            cfg.power.wakeCheckIntervalMs = power["wakeCheckIntervalMs"] | cfg.power.wakeCheckIntervalMs;
-            cfg.power.wakeSourcePn532Enabled = power["wakeSourcePn532Enabled"] | cfg.power.wakeSourcePn532Enabled;
-            cfg.power.wakeSourceTimerEnabled = power["wakeSourceTimerEnabled"] | cfg.power.wakeSourceTimerEnabled;
-            cfg.power.timerWakeIntervalMs = power["timerWakeIntervalMs"] | cfg.power.timerWakeIntervalMs;
-            cfg.power.wifiPowerSaveEnabled = power["wifiPowerSaveEnabled"] | cfg.power.wifiPowerSaveEnabled;
-            cfg.power.cpuFrequencyMhz = power["cpuFrequencyMhz"] | cfg.power.cpuFrequencyMhz;
-
-            if (power["sleepType"].is<const char *>()) {
-                if (const auto sleepType = power["sleepType"].as<const char *>(); sleepType == "light") {
-                    cfg.power.sleepType = PowerConfig::SleepType::Light;
-                } else if (sleepType == "deep") {
-                    cfg.power.sleepType = PowerConfig::SleepType::Deep;
-                } else {
-                    cfg.power.sleepType = PowerConfig::SleepType::None;
-                }
-            }
-        }
-
-        // Health
-        if (const auto health = root["health"].as<JsonObjectConst>()) {
-            cfg.health.checkIntervalMs = health["checkIntervalMs"] | cfg.health.checkIntervalMs;
-            cfg.health.reportIntervalMs = health["reportIntervalMs"] | cfg.health.reportIntervalMs;
-            cfg.health.publishToMqtt = health["publishToMqtt"] | cfg.health.publishToMqtt;
-            cfg.health.logToSerial = health["logToSerial"] | cfg.health.logToSerial;
-            cfg.health.mqttUnhealthyAfterMs = health["mqttUnhealthyAfterMs"] | cfg.health.mqttUnhealthyAfterMs;
-            cfg.health.wifiUnhealthyAfterMs = health["wifiUnhealthyAfterMs"] | cfg.health.wifiUnhealthyAfterMs;
-        }
-
-        // Log
-        if (const auto log = root["log"].as<JsonObjectConst>()) {
-            cfg.log.includeTimestamps = log["includeTimestamps"] | cfg.log.includeTimestamps;
-            cfg.log.colorOutput = log["colorOutput"] | cfg.log.colorOutput;
-
-            if (log["serialLevel"].is<uint8_t>()) {
-                cfg.log.serialLevel = static_cast<LogConfig::Level>(log["serialLevel"].as<uint8_t>());
-            }
-            if (log["mqttLevel"].is<uint8_t>()) {
-                cfg.log.mqttLevel = static_cast<LogConfig::Level>(log["mqttLevel"].as<uint8_t>());
-            }
-        }
-
-        if (!cfg.validate()) {
-            LOG_WARNING(CONFIG_SERVICE_TAG, "Loaded config fails validation, using defaults");
-            cfg = AppConfig::makeDefault();
-        }
-
-        m_config = cfg;
-        LOG_INFO(CONFIG_SERVICE_TAG, "Config loaded from NVS");
-        return Status::OK();
+bool parseBool(const JsonVariant &json, const char *key, bool &target)
+{
+    if (json[key].is<bool>())
+    {
+        target = json[key].as<bool>();
+        return true;
     }
 
-    Status ConfigService::save() {
-        JsonDocument doc{};
-        const auto root{doc.to<JsonObject>()};
+    return false;
+}
 
-        // WiFi
-        {
-            const auto wifi{root["wifi"].to<JsonObject>()};
-            wifi["ssid"] = m_config.wifi.ssid;
-            wifi["password"] = m_config.wifi.password;
-            wifi["connectTimeoutMs"] = m_config.wifi.connectTimeoutMs;
-            wifi["maxRetries"] = m_config.wifi.maxRetries;
-        }
+std::string serializeToJson(const Config &config)
+{
+    JsonDocument doc;
 
-        // MQTT
-        {
-            const auto mqtt{root["mqtt"].to<JsonObject>()};
-            mqtt["broker"] = m_config.mqtt.broker;
-            mqtt["port"] = m_config.mqtt.port;
-            mqtt["username"] = m_config.mqtt.username;
-            mqtt["password"] = m_config.mqtt.password;
-            mqtt["baseTopic"] = m_config.mqtt.baseTopic;
-            mqtt["tls"] = m_config.mqtt.tls;
-            mqtt["keepAliveSeconds"] = m_config.mqtt.keepAliveSeconds;
-            mqtt["reconnectBackoffMinMs"] = m_config.mqtt.reconnectBackoffMinMs;
-            mqtt["reconnectBackoffMaxMs"] = m_config.mqtt.reconnectBackoffMaxMs;
-            mqtt["outboundQueueSize"] = m_config.mqtt.outboundQueueSize;
-        }
+    // Version and magic for validation
+    doc["magic"] = config.magic;
+    doc["version"] = config.version;
 
-        // Device
-        {
-            const auto device{root["device"].to<JsonObject>()};
-            device["deviceId"] = m_config.device.deviceId;
-            device["locationId"] = m_config.device.locationId;
-            device["firmwareVersion"] = m_config.device.firmwareVersion;
-        }
+    // WiFi
+    const auto wifiConfig{config.wifi};
+    const auto wifi{doc["wifi"].to<JsonObject>()};
+    wifi["stationSsid"] = wifiConfig.stationSsid;
+    wifi["stationPassword"] = wifiConfig.stationPassword;
+    wifi["stationConnectRetryDelayMs"] = wifiConfig.stationConnectRetryDelayMs;
+    wifi["stationConnectionTimeoutMs"] = wifiConfig.stationConnectionTimeoutMs;
+    wifi["stationMaxConnectionAttempts"] = wifiConfig.stationMaxConnectionAttempts;
+    wifi["stationPowerSaveEnabled"] = wifiConfig.stationPowerSaveEnabled;
+    wifi["accessPointSsidPrefix"] = wifiConfig.accessPointSsidPrefix;
+    wifi["accessPointPassword"] = wifiConfig.accessPointPassword;
+    wifi["accessPointModeTimeoutMs"] = wifiConfig.accessPointModeTimeoutMs;
 
-        // Attendance
-        {
-            const auto att{root["attendance"].to<JsonObject>()};
-            att["debounceMs"] = m_config.attendance.debounceMs;
-            att["offlineBufferSize"] = m_config.attendance.offlineBufferSize;
-            att["eventQueueSize"] = m_config.attendance.eventQueueSize;
-            att["queueHighWatermark"] = m_config.attendance.queueHighWatermark;
-        }
+    // MQTT
+    const auto mqttConfig{config.mqtt};
+    const auto mqtt{doc["mqtt"].to<JsonObject>()};
+    mqtt["brokerAddress"] = mqttConfig.brokerAddress;
+    mqtt["port"] = mqttConfig.port;
+    mqtt["username"] = mqttConfig.username;
+    mqtt["password"] = mqttConfig.password;
+    mqtt["baseTopic"] = mqttConfig.baseTopic;
+    mqtt["keepAliveIntervalSec"] = mqttConfig.keepAliveIntervalSec;
+    mqtt["reconnectMinIntervalMs"] = mqttConfig.reconnectMinIntervalMs;
+    mqtt["reconnectMaxIntervalMs"] = mqttConfig.reconnectMaxIntervalMs;
 
-        // OTA
-        {
-            const auto ota{root["ota"].to<JsonObject>()};
-            ota["autoCheck"] = m_config.ota.autoCheck;
-            ota["checkIntervalMs"] = m_config.ota.checkIntervalMs;
-            ota["updateServerUrl"] = m_config.ota.updateServerUrl;
-            ota["requireHttps"] = m_config.ota.requireHttps;
-        }
+    // Device
+    const auto deviceConfig{config.device};
+    const auto device{doc["device"].to<JsonObject>()};
+    device["deviceId"] = deviceConfig.deviceId;
+    device["locationId"] = deviceConfig.locationId;
 
-        // PN532
-        {
-            const auto pn532{root["pn532"].to<JsonObject>()};
-            pn532["irqPin"] = m_config.pn532.irqPin;
-            pn532["resetPin"] = m_config.pn532.resetPin;
-            pn532["pollIntervalMs"] = m_config.pn532.pollIntervalMs;
-            pn532["cardReadTimeoutMs"] = m_config.pn532.cardReadTimeoutMs;
-            pn532["healthCheckIntervalMs"] = m_config.pn532.healthCheckIntervalMs;
-            pn532["communicationTimeoutMs"] = m_config.pn532.communicationTimeoutMs;
-            pn532["maxConsecutiveErrors"] = m_config.pn532.maxConsecutiveErrors;
-            pn532["recoveryDelayMs"] = m_config.pn532.recoveryDelayMs;
-            pn532["maxRecoveryAttempts"] = m_config.pn532.maxRecoveryAttempts;
-            pn532["wakeOnCardEnabled"] = m_config.pn532.wakeOnCardEnabled;
-        }
+    // PN532
+    const auto pn532Config{config.pn532};
+    const auto pn532{doc["pn532"].to<JsonObject>()};
+    pn532["spiSckPin"] = pn532Config.spiSckPin;
+    pn532["spiMisoPin"] = pn532Config.spiMisoPin;
+    pn532["spiMosiPin"] = pn532Config.spiMosiPin;
+    pn532["spiCsPin"] = pn532Config.spiCsPin;
+    pn532["irqPin"] = pn532Config.irqPin;
+    pn532["resetPin"] = pn532Config.resetPin;
+    pn532["pollIntervalMs"] = pn532Config.pollIntervalMs;
+    pn532["readTimeoutMs"] = pn532Config.readTimeoutMs;
+    pn532["maxConsecutiveErrors"] = pn532Config.maxConsecutiveErrors;
+    pn532["recoveryDelayMs"] = pn532Config.recoveryDelayMs;
 
-        // Power
-        {
-            const auto power{root["power"].to<JsonObject>()};
-            power["sleepEnabled"] = m_config.power.sleepEnabled;
-            power["idleTimeoutMs"] = m_config.power.idleTimeoutMs;
-            power["wakeCheckIntervalMs"] = m_config.power.wakeCheckIntervalMs;
-            power["wakeSourcePn532Enabled"] = m_config.power.wakeSourcePn532Enabled;
-            power["wakeSourceTimerEnabled"] = m_config.power.wakeSourceTimerEnabled;
-            power["timerWakeIntervalMs"] = m_config.power.timerWakeIntervalMs;
-            power["wifiPowerSaveEnabled"] = m_config.power.wifiPowerSaveEnabled;
-            power["cpuFrequencyMhz"] = m_config.power.cpuFrequencyMhz;
+    // Attendance
+    const auto attendanceConfig{config.attendance};
+    const auto attendance{doc["attendance"].to<JsonObject>()};
+    attendance["debounceIntervalMs"] = attendanceConfig.debounceIntervalMs;
+    attendance["batchMaxSize"] = attendanceConfig.batchMaxSize;
+    attendance["batchFlushIntervalMs"] = attendanceConfig.batchFlushIntervalMs;
+    attendance["offlineBufferSize"] = attendanceConfig.offlineBufferSize;
+    attendance["offlineBufferFlushIntervalMs"] = attendanceConfig.offlineBufferFlushIntervalMs;
+    attendance["batchingEnabled"] = attendanceConfig.batchingEnabled;
+    attendance["offlineQueuePolicy"] = static_cast<uint8_t>(attendanceConfig.offlineQueuePolicy);
 
-            const auto *sleepType{"none"};
-            switch (m_config.power.sleepType) {
-                case PowerConfig::SleepType::Light: {
-                    sleepType = "light";
-                    break;
+    // Feedback
+    const auto feedbackConfig{config.feedback};
+    const auto feedback{doc["feedback"].to<JsonObject>()};
+    feedback["enabled"] = feedbackConfig.enabled;
+    feedback["ledEnabled"] = feedbackConfig.ledEnabled;
+    feedback["ledPin"] = feedbackConfig.ledPin;
+    feedback["buzzerEnabled"] = feedbackConfig.buzzerEnabled;
+    feedback["buzzerPin"] = feedbackConfig.buzzerPin;
+    feedback["ledActiveHigh"] = feedbackConfig.ledActiveHigh;
+    feedback["beepFrequencyHz"] = feedbackConfig.beepFrequencyHz;
+    feedback["successBlinkDurationMs"] = feedbackConfig.successBlinkDurationMs;
+    feedback["errorBlinkDurationMs"] = feedbackConfig.errorBlinkDurationMs;
+
+    // Health
+    const auto healthConfig{config.health};
+    const auto health{doc["health"].to<JsonObject>()};
+    health["healthCheckIntervalMs"] = healthConfig.healthCheckIntervalMs;
+    health["statusUpdateIntervalMs"] = healthConfig.statusUpdateIntervalMs;
+    health["enabled"] = healthConfig.enabled;
+    health["publishToMqtt"] = healthConfig.publishToMqtt;
+    health["publishToLog"] = healthConfig.publishToLog;
+
+    // OTA
+    const auto otaConfig{config.ota};
+    const auto ota{doc["ota"].to<JsonObject>()};
+    ota["enabled"] = otaConfig.enabled;
+    ota["updateServerUrl"] = otaConfig.updateServerUrl;
+    ota["username"] = otaConfig.username;
+    ota["password"] = otaConfig.password;
+
+    // Power
+    const auto powerConfig{config.power};
+    const auto power{doc["power"].to<JsonObject>()};
+    power["sleepIntervalMs"] = powerConfig.sleepIntervalMs;
+    power["maxDeepSleepMs"] = powerConfig.maxDeepSleepMs;
+    power["lightSleepDurationMs"] = powerConfig.lightSleepDurationMs;
+    power["idleTimeoutMs"] = powerConfig.idleTimeoutMs;
+    power["enableTimerWakeup"] = powerConfig.enableTimerWakeup;
+    power["enableNfcWakeup"] = powerConfig.enableNfcWakeup;
+    power["nfcWakeupPin"] = powerConfig.nfcWakeupPin;
+    power["autoSleepEnabled"] = powerConfig.autoSleepEnabled;
+    power["disableWiFiDuringSleep"] = powerConfig.disableWiFiDuringSleep;
+    power["pn532SleepBetweenScans"] = powerConfig.pn532SleepBetweenScans;
+    power["smartSleepEnabled"] = powerConfig.smartSleepEnabled;
+    power["modemSleepOnMqttDisconnect"] = powerConfig.modemSleepOnMqttDisconnect;
+    power["modemSleepDurationMs"] = powerConfig.modemSleepDurationMs;
+    power["smartSleepShortThresholdMs"] = powerConfig.smartSleepShortThresholdMs;
+    power["smartSleepMediumThresholdMs"] = powerConfig.smartSleepMediumThresholdMs;
+    power["activityTypeMask"] = powerConfig.activityTypeMask;
+
+    std::string result;
+    result.reserve(1024); // Pre-allocate for typical config size
+    serializeJson(doc, result);
+    return result;
+}
+
+// Macros for parsing fields and setting 'changed' flag if updated, just to reduce code duplication
+// Parse string field: PARSE_STR(json, "fieldName", config.field)
+#define PARSE_STR(json, key, field)        \
+    do                                     \
+    {                                      \
+        if (parseString(json, key, field)) \
+            changed = true;                \
+    }                                      \
+    while (0)
+
+// Parse numeric field: PARSE_NUM(json, "fieldName", config.field)
+#define PARSE_NUM(json, key, field)        \
+    do                                     \
+    {                                      \
+        if (parseNumber(json, key, field)) \
+            changed = true;                \
+    }                                      \
+    while (0)
+
+// Parse bool field: PARSE_BOOL(json, "fieldName", config.field)
+#define PARSE_BOOL(json, key, field)     \
+    do                                   \
+    {                                    \
+        if (parseBool(json, key, field)) \
+            changed = true;              \
+    }                                    \
+    while (0)
+} // namespace
+
+ConfigService::ConfigService(EventBus &bus)
+    : ServiceBase("ConfigService")
+    , m_bus(bus)
+{
+
+    m_eventConnections.reserve(3);
+    m_eventConnections.push_back(
+            m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
+                m_bus.publish(Event{EventType::MqttSubscribeRequest, MqttEvent{.topic = "config/set/#"}});
+            }));
+    m_eventConnections.push_back(
+            m_bus.subscribeScoped(EventType::MqttMessage, [this](const Event &event) {
+                if (const auto *mqtt = event.get<MqttEvent>(); mqtt && mqtt->topic.find("/config/set") != std::string::npos)
+                {
+                    handleConfigMessage(mqtt->topic, mqtt->payload);
                 }
-                case PowerConfig::SleepType::Deep: {
-                    sleepType = "deep";
-                    break;
-                }
-                default: {
-                    break;
-                }
-            }
-            power["sleepType"] = sleepType;
-        }
+            }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event &) {
+        // Mark config as dirty so it gets saved in next loop() iteration
+        LOG_INFO(m_name, "Configuration changed, marking as dirty");
+        m_dirty = true;
+    }));
+}
 
-        // Health
-        {
-            const auto health{root["health"].to<JsonObject>()};
-            health["checkIntervalMs"] = m_config.health.checkIntervalMs;
-            health["reportIntervalMs"] = m_config.health.reportIntervalMs;
-            health["publishToMqtt"] = m_config.health.publishToMqtt;
-            health["logToSerial"] = m_config.health.logToSerial;
-            health["mqttUnhealthyAfterMs"] = m_config.health.mqttUnhealthyAfterMs;
-            health["wifiUnhealthyAfterMs"] = m_config.health.wifiUnhealthyAfterMs;
-        }
-
-        // Log
-        {
-            const auto log{root["log"].to<JsonObject>()};
-            log["serialLevel"] = static_cast<uint8_t>(m_config.log.serialLevel);
-            log["mqttLevel"] = static_cast<uint8_t>(m_config.log.mqttLevel);
-            log["includeTimestamps"] = m_config.log.includeTimestamps;
-            log["colorOutput"] = m_config.log.colorOutput;
-        }
-
-        String json{};
-        serializeJson(doc, json);
-
-        if (!m_prefs.putString(PREF_KEY_CONFIG, json)) {
-            LOG_ERROR(CONFIG_SERVICE_TAG, "Failed to save config to NVS");
-            return Status::Error(ErrorCode::StorageError, "NVS putString failed");
-        }
-
-        LOG_INFO(CONFIG_SERVICE_TAG, "Config saved to NVS");
-        return Status::OK();
-    }
-
-    Status ConfigService::updateFromJson(const std::string &json) {
-        JsonDocument doc{};
-        if (const auto err = deserializeJson(doc, json); err) {
-            LOG_ERROR(CONFIG_SERVICE_TAG, "JSON parse error in update: %s", err.c_str());
-            return Status::Error(ErrorCode::JsonError, "Deserialize failed");
-        }
-
-        auto newCfg{m_config};
-        const auto root{doc.as<JsonObject>()};
-
-        // Partial update - only override fields that are present
-        if (const auto wifi = root["wifi"].as<JsonObjectConst>()) {
-            if (wifi["ssid"].is<const char *>()) {
-                newCfg.wifi.ssid = wifi["ssid"].as<const char *>();
-            }
-            if (wifi["password"].is<const char *>()) {
-                newCfg.wifi.password = wifi["password"].as<const char *>();
-            }
-            if (wifi["connectTimeoutMs"].is<uint32_t>()) {
-                newCfg.wifi.connectTimeoutMs = wifi["connectTimeoutMs"].as<uint32_t>();
-            }
-            if (wifi["maxRetries"].is<uint8_t>()) {
-                newCfg.wifi.maxRetries = wifi["maxRetries"].as<uint8_t>();
-            }
-        }
-
-        if (const auto mqtt = root["mqtt"].as<JsonObjectConst>()) {
-            if (mqtt["broker"].is<const char *>()) {
-                newCfg.mqtt.broker = mqtt["broker"].as<const char *>();
-            }
-            if (mqtt["port"].is<uint16_t>()) {
-                newCfg.mqtt.port = mqtt["port"].as<uint16_t>();
-            }
-            if (mqtt["username"].is<const char *>()) {
-                newCfg.mqtt.username = mqtt["username"].as<const char *>();
-            }
-            if (mqtt["password"].is<const char *>()) {
-                newCfg.mqtt.password = mqtt["password"].as<const char *>();
-            }
-            if (mqtt["baseTopic"].is<const char *>()) {
-                newCfg.mqtt.baseTopic = mqtt["baseTopic"].as<const char *>();
-            }
-            if (mqtt["tls"].is<bool>()) {
-                newCfg.mqtt.tls = mqtt["tls"].as<bool>();
-            }
-            if (mqtt["keepAliveSeconds"].is<uint32_t>()) {
-                newCfg.mqtt.keepAliveSeconds = mqtt["keepAliveSeconds"].as<uint32_t>();
-            }
-            if (mqtt["outboundQueueSize"].is<size_t>()) {
-                newCfg.mqtt.outboundQueueSize = mqtt["outboundQueueSize"].as<size_t>();
-            }
-        }
-
-        if (const auto dev = root["device"].as<JsonObjectConst>()) {
-            if (dev["deviceId"].is<const char *>()) {
-                newCfg.device.deviceId = dev["deviceId"].as<const char *>();
-            }
-            if (dev["locationId"].is<const char *>()) {
-                newCfg.device.locationId = dev["locationId"].as<const char *>();
-            }
-        }
-
-        if (const auto att = root["attendance"].as<JsonObjectConst>()) {
-            if (att["debounceMs"].is<uint32_t>()) {
-                newCfg.attendance.debounceMs = att["debounceMs"].as<uint32_t>();
-            }
-            if (att["offlineBufferSize"].is<size_t>()) {
-                newCfg.attendance.offlineBufferSize = att["offlineBufferSize"].as<size_t>();
-            }
-            if (att["queueHighWatermark"].is<size_t>()) {
-                newCfg.attendance.queueHighWatermark = att["queueHighWatermark"].as<size_t>();
-            }
-        }
-
-        if (const auto pn532 = root["pn532"].as<JsonObjectConst>()) {
-            if (pn532["pollIntervalMs"].is<uint32_t>()) {
-                newCfg.pn532.pollIntervalMs = pn532["pollIntervalMs"].as<uint32_t>();
-            }
-            if (pn532["healthCheckIntervalMs"].is<uint32_t>()) {
-                newCfg.pn532.healthCheckIntervalMs = pn532["healthCheckIntervalMs"].as<uint32_t>();
-            }
-            if (pn532["maxConsecutiveErrors"].is<uint8_t>()) {
-                newCfg.pn532.maxConsecutiveErrors = pn532["maxConsecutiveErrors"].as<uint8_t>();
-            }
-        }
-
-        if (const auto power = root["power"].as<JsonObjectConst>()) {
-            if (power["sleepEnabled"].is<bool>()) {
-                newCfg.power.sleepEnabled = power["sleepEnabled"].as<bool>();
-            }
-            if (power["idleTimeoutMs"].is<uint32_t>()) {
-                newCfg.power.idleTimeoutMs = power["idleTimeoutMs"].as<uint32_t>();
-            }
-            if (power["sleepType"].is<const char *>()) {
-                if (const auto sleepType = power["sleepType"].as<const char *>(); sleepType == "light") {
-                    newCfg.power.sleepType = PowerConfig::SleepType::Light;
-                }
-                else if (sleepType == "deep") {
-                    newCfg.power.sleepType = PowerConfig::SleepType::Deep;
-                }
-                else {
-                    newCfg.power.sleepType = PowerConfig::SleepType::None;
-                }
-            }
-        }
-
-        if (const auto health = root["health"].as<JsonObjectConst>()) {
-            if (health["checkIntervalMs"].is<uint32_t>()) {
-                newCfg.health.checkIntervalMs = health["checkIntervalMs"].as<uint32_t>();
-            }
-            if (health["reportIntervalMs"].is<uint32_t>()) {
-                newCfg.health.reportIntervalMs = health["reportIntervalMs"].as<uint32_t>();
-            }
-        }
-
-        if (!newCfg.validate()) {
-            LOG_WARNING(CONFIG_SERVICE_TAG, "Rejected invalid config update");
-            return Status::Error(ErrorCode::InvalidArgument, "Config validation failed");
-        }
-
-        m_config = newCfg;
-        (void) save(); // TODO: handle save error?
-        notifyUpdated();
-        return Status::OK();
-    }
-
-    void ConfigService::notifyUpdated() const {
-        auto evt = std::make_unique<Event>(Event{
-            .type = EventType::ConfigUpdated,
-            .payload = ConfigUpdatedEvent{&m_config},
-            .timestampMs = static_cast<std::uint64_t>(millis())
-        });
-        (void) m_bus.publish(std::move(evt)); // TODO: check publish result
-    }
-
-    void ConfigService::onEvent(const Event &event) {
-        // Handle MQTT config update messages
-        if (event.type == EventType::MqttMessageReceived) {
-            if (const auto *msg = std::get_if<MqttMessageEvent>(&event.payload)) {
-                // Check if it's a config update message
-                if (msg->topic.find("/config/set") != std::string::npos) {
-                    LOG_INFO(CONFIG_SERVICE_TAG, "Received config update via MQTT");
-                    (void) updateFromJson(msg->payload); // TODO: handle update error?
-                }
-            }
-        }
+ConfigService::~ConfigService()
+{
+    if (m_dirty)
+    {
+        (void) save(); // TODO: handle failure? i think in destructor we can't do much about it so just ignore
     }
 }
+
+Status ConfigService::begin()
+{
+    setState(ServiceState::Initializing);
+    LOG_INFO(m_name, "Initializing (version=%u, magic=0x%08X)...", Config::kVersion, Config::kMagicNumber);
+
+    // Initialize LittleFS
+    if (!LittleFS.begin())
+    {
+        LOG_ERROR(m_name, "LittleFS mount failed, formatting...");
+        if (!LittleFS.format() || !LittleFS.begin())
+        {
+            setState(ServiceState::Error);
+            return Status::Error("LittleFS init failed");
+        }
+    }
+
+    // Load configuration
+    if (load().failed())
+    {
+        LOG_WARN(m_name, "Load failed or version mismatch, resetting to defaults");
+        m_config.restoreDefaults();
+
+        // Delete old config file to clean up incompatible data
+        if (LittleFS.exists(CONFIG_FILE))
+        {
+            LOG_INFO(m_name, "Removing old config file");
+            LittleFS.remove(CONFIG_FILE);
+        }
+
+        (void) save(); // TODO: handle failure?
+    }
+
+    setState(ServiceState::Running);
+    LOG_INFO(m_name, "Ready, device=%s, fw=%s", m_config.device.deviceId.c_str(), DeviceConfig::Constants::kFirmwareVersion);
+    return Status::Ok();
+}
+
+void ConfigService::loop()
+{
+    if (m_dirty)
+    {
+        (void) save(); // TODO: handle failure?
+        m_dirty = false;
+    }
+}
+
+void ConfigService::end()
+{
+    if (m_dirty)
+    {
+        (void) save(); // TODO: handle failure?
+    }
+
+    m_eventConnections.clear();
+    setState(ServiceState::Stopped);
+}
+
+Status ConfigService::save()
+{
+    LOG_DEBUG(m_name, "Saving to %s", CONFIG_FILE);
+
+    auto file = LittleFS.open(CONFIG_FILE, "w");
+    if (!file)
+    {
+        LOG_ERROR(m_name, "Failed to open for write");
+        return Status::Error("File open failed");
+    }
+
+    const auto json{serializeToJson(m_config)};
+    const auto written{file.print(json.c_str())};
+    file.close();
+
+    if (written != json.length())
+    {
+        LOG_ERROR(m_name, "Write incomplete: %u/%u", written, json.length());
+        return Status::Error("Write failed");
+    }
+
+    LOG_INFO(m_name, "Saved (%u bytes)", written);
+    m_dirty = false;
+    return Status::Ok();
+}
+
+Status ConfigService::saveNow()
+{
+    return save();
+}
+
+Status ConfigService::load()
+{
+    LOG_DEBUG(m_name, "Loading from %s", CONFIG_FILE);
+
+    if (!LittleFS.exists(CONFIG_FILE))
+    {
+        LOG_INFO(m_name, "File not found");
+        return Status::Error("Not found");
+    }
+
+    auto file = LittleFS.open(CONFIG_FILE, "r");
+    if (!file)
+    {
+        LOG_ERROR(m_name, "Failed to open for read");
+        return Status::Error("Open failed");
+    }
+
+    const String json{file.readString()};
+    file.close();
+
+    if (json.isEmpty())
+    {
+        LOG_ERROR(m_name, "Empty file");
+        return Status::Error("Empty file");
+    }
+
+    if (!parseJson(json.c_str()))
+    {
+        LOG_ERROR(m_name, "Parse failed");
+        return Status::Error("Parse failed");
+    }
+
+    LOG_INFO(m_name, "Loaded");
+    return Status::Ok();
+}
+
+Status ConfigService::reset()
+{
+    LOG_INFO(m_name, "Resetting to defaults");
+    m_config.restoreDefaults();
+    const auto status{save()}; // TODO: handle failure? first time handle it becouse we are resetting to defaults
+    m_bus.publish(Event{EventType::ConfigChanged});
+    return status;
+}
+
+Status ConfigService::updateFromJson(const char *json)
+{
+    if (!json || !parseJson(json))
+    {
+        return Status::Error("Invalid JSON");
+    }
+
+    m_dirty = true;
+    m_bus.publish(Event{EventType::ConfigChanged});
+    return Status::Ok();
+}
+
+void ConfigService::handleConfigMessage(const std::string &topic, const std::string &payload)
+{
+    JsonDocument doc;
+    if (const auto error = deserializeJson(doc, payload); error)
+    {
+        LOG_ERROR(m_name, "JSON error: %s", error.c_str());
+        return;
+    }
+
+    bool updated{false};
+    const auto json{doc.as<JsonVariant>()};
+
+    // Route based on topic suffix
+    if (endsWith(topic, "/wifi"))
+    {
+        LOG_INFO(m_name, "Updating WiFi");
+        updated = parseWifiConfig(json);
+    }
+    else if (endsWith(topic, "/mqtt"))
+    {
+        LOG_INFO(m_name, "Updating MQTT");
+        updated = parseMqttConfig(json);
+    }
+    else if (endsWith(topic, "/device"))
+    {
+        LOG_INFO(m_name, "Updating Device");
+        updated = parseDeviceConfig(json);
+    }
+    else if (endsWith(topic, "/pn532"))
+    {
+        LOG_INFO(m_name, "Updating PN532");
+        updated = parsePn532Config(json);
+    }
+    else if (endsWith(topic, "/attendance"))
+    {
+        LOG_INFO(m_name, "Updating Attendance");
+        updated = parseAttendanceConfig(json);
+    }
+    else if (endsWith(topic, "/feedback"))
+    {
+        LOG_INFO(m_name, "Updating Feedback");
+        updated = parseFeedbackConfig(json);
+    }
+    else if (endsWith(topic, "/health"))
+    {
+        LOG_INFO(m_name, "Updating Health");
+        updated = parseHealthConfig(json);
+    }
+    else if (endsWith(topic, "/ota"))
+    {
+        LOG_INFO(m_name, "Updating OTA");
+        updated = parseOtaConfig(json);
+    }
+    else if (endsWith(topic, "/power"))
+    {
+        LOG_INFO(m_name, "Updating Power");
+        updated = parsePowerConfig(json);
+    }
+    else
+    {
+        // Full config update
+        LOG_INFO(m_name, "Full update");
+        updated = parseJson(payload.c_str());
+    }
+
+    if (updated)
+    {
+        m_dirty = true;
+        m_bus.publish(Event{EventType::ConfigChanged});
+    }
+}
+
+bool ConfigService::parseJson(const char *json)
+{
+    JsonDocument doc;
+    if (const auto error = deserializeJson(doc, json); error)
+    {
+        LOG_ERROR(m_name, "Parse error: %s", error.c_str());
+        return false;
+    }
+
+    // Validate magic number and version
+    if (doc["magic"].is<std::uint32_t>())
+    {
+        if (const auto magic{doc["magic"].as<std::uint32_t>()}; magic != Config::kMagicNumber)
+        {
+            LOG_ERROR(m_name, "Invalid magic number: 0x%08X (expected 0x%08X)", magic, Config::kMagicNumber);
+            return false;
+        }
+    }
+    else
+    {
+        LOG_WARN(m_name, "No magic number in config, may be old version");
+        return false;
+    }
+
+    if (doc["version"].is<std::uint16_t>())
+    {
+        if (const auto version{doc["version"].as<std::uint16_t>()}; version != Config::kVersion)
+        {
+            LOG_ERROR(m_name, "Config version mismatch: %u (expected %u)", version, Config::kVersion);
+            return false;
+        }
+    }
+    else
+    {
+        LOG_WARN(m_name, "No version in config, may be old version");
+        return false;
+    }
+
+    if (doc["wifi"].is<JsonObject>())
+    {
+        parseWifiConfig(doc["wifi"]);
+    }
+    if (doc["mqtt"].is<JsonObject>())
+    {
+        parseMqttConfig(doc["mqtt"]);
+    }
+    if (doc["device"].is<JsonObject>())
+    {
+        parseDeviceConfig(doc["device"]);
+    }
+    if (doc["pn532"].is<JsonObject>())
+    {
+        parsePn532Config(doc["pn532"]);
+    }
+    if (doc["attendance"].is<JsonObject>())
+    {
+        parseAttendanceConfig(doc["attendance"]);
+    }
+    if (doc["feedback"].is<JsonObject>())
+    {
+        parseFeedbackConfig(doc["feedback"]);
+    }
+    if (doc["health"].is<JsonObject>())
+    {
+        parseHealthConfig(doc["health"]);
+    }
+    if (doc["ota"].is<JsonObject>())
+    {
+        parseOtaConfig(doc["ota"]);
+    }
+    if (doc["power"].is<JsonObject>())
+    {
+        parsePowerConfig(doc["power"]);
+    }
+
+    return true;
+}
+
+bool ConfigService::parseWifiConfig(const JsonVariant &json)
+{
+    if (!json.is<JsonObject>())
+    {
+        return false;
+    }
+
+    bool changed{false};
+    auto &wifiConfig{m_config.wifi};
+
+    PARSE_STR(json, "stationSsid", wifiConfig.stationSsid);
+    PARSE_STR(json, "stationPassword", wifiConfig.stationPassword);
+    PARSE_NUM(json, "stationConnectRetryDelayMs", wifiConfig.stationConnectRetryDelayMs);
+    PARSE_NUM(json, "stationConnectionTimeoutMs", wifiConfig.stationConnectionTimeoutMs);
+    PARSE_NUM(json, "stationMaxConnectionAttempts", wifiConfig.stationMaxConnectionAttempts);
+    PARSE_BOOL(json, "stationPowerSaveEnabled", wifiConfig.stationPowerSaveEnabled);
+    PARSE_STR(json, "accessPointSsidPrefix", wifiConfig.accessPointSsidPrefix);
+    PARSE_STR(json, "accessPointPassword", wifiConfig.accessPointPassword);
+    PARSE_NUM(json, "accessPointModeTimeoutMs", wifiConfig.accessPointModeTimeoutMs);
+
+    return changed;
+}
+
+bool ConfigService::parseMqttConfig(const JsonVariant &json)
+{
+    if (!json.is<JsonObject>())
+    {
+        return false;
+    }
+
+    bool changed{false};
+    auto &mqttConfig{m_config.mqtt};
+
+    PARSE_STR(json, "brokerAddress", mqttConfig.brokerAddress);
+    PARSE_NUM(json, "port", mqttConfig.port);
+    PARSE_STR(json, "username", mqttConfig.username);
+    PARSE_STR(json, "password", mqttConfig.password);
+    PARSE_STR(json, "baseTopic", mqttConfig.baseTopic);
+    PARSE_NUM(json, "keepAliveIntervalSec", mqttConfig.keepAliveIntervalSec);
+    PARSE_NUM(json, "reconnectMinIntervalMs", mqttConfig.reconnectMinIntervalMs);
+    PARSE_NUM(json, "reconnectMaxIntervalMs", mqttConfig.reconnectMaxIntervalMs);
+
+    return changed;
+}
+
+bool ConfigService::parseDeviceConfig(const JsonVariant &json)
+{
+    if (!json.is<JsonObject>())
+    {
+        return false;
+    }
+
+    bool changed{false};
+    auto &deviceConfig{m_config.device};
+
+    PARSE_STR(json, "deviceId", deviceConfig.deviceId);
+    PARSE_STR(json, "locationId", deviceConfig.locationId);
+
+    return changed;
+}
+
+bool ConfigService::parsePn532Config(const JsonVariant &json)
+{
+    if (!json.is<JsonObject>())
+    {
+        return false;
+    }
+
+    bool changed{false};
+    auto &pn532Config{m_config.pn532};
+
+    PARSE_NUM(json, "spiSckPin", pn532Config.spiSckPin);
+    PARSE_NUM(json, "spiMisoPin", pn532Config.spiMisoPin);
+    PARSE_NUM(json, "spiMosiPin", pn532Config.spiMosiPin);
+    PARSE_NUM(json, "spiCsPin", pn532Config.spiCsPin);
+    PARSE_NUM(json, "irqPin", pn532Config.irqPin);
+    PARSE_NUM(json, "resetPin", pn532Config.resetPin);
+    PARSE_NUM(json, "pollIntervalMs", pn532Config.pollIntervalMs);
+    PARSE_NUM(json, "readTimeoutMs", pn532Config.readTimeoutMs);
+    PARSE_NUM(json, "maxConsecutiveErrors", pn532Config.maxConsecutiveErrors);
+    PARSE_NUM(json, "recoveryDelayMs", pn532Config.recoveryDelayMs);
+
+    return changed;
+}
+
+bool ConfigService::parseAttendanceConfig(const JsonVariant &json)
+{
+    if (!json.is<JsonObject>())
+    {
+        return false;
+    }
+
+    bool changed{false};
+    auto &attendanceConfig{m_config.attendance};
+
+    PARSE_NUM(json, "debounceIntervalMs", attendanceConfig.debounceIntervalMs);
+    PARSE_NUM(json, "batchMaxSize", attendanceConfig.batchMaxSize);
+    PARSE_NUM(json, "batchFlushIntervalMs", attendanceConfig.batchFlushIntervalMs);
+    PARSE_NUM(json, "offlineBufferSize", attendanceConfig.offlineBufferSize);
+    PARSE_NUM(json, "offlineBufferFlushIntervalMs", attendanceConfig.offlineBufferFlushIntervalMs);
+    PARSE_BOOL(json, "batchingEnabled", attendanceConfig.batchingEnabled);
+
+    // Parse enum separately, with validation. offlineQueuePolicy is uint8_t in JSON so 0 - DropOldest, 1 - DropNewest, 2 - DropAll
+    if (json["offlineQueuePolicy"].is<uint8_t>())
+    {
+        if (const auto policy{json["offlineQueuePolicy"].as<uint8_t>()}; policy <= static_cast<uint8_t>(AttendanceConfig::OfflineQueuePolicy::DropAll))
+        {
+            attendanceConfig.offlineQueuePolicy = static_cast<AttendanceConfig::OfflineQueuePolicy>(policy);
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
+bool ConfigService::parseFeedbackConfig(const JsonVariant &json)
+{
+    if (!json.is<JsonObject>())
+    {
+        return false;
+    }
+
+    bool changed{false};
+    auto &feedbackConfig{m_config.feedback};
+
+    PARSE_BOOL(json, "enabled", feedbackConfig.enabled);
+    PARSE_BOOL(json, "ledEnabled", feedbackConfig.ledEnabled);
+    PARSE_NUM(json, "ledPin", feedbackConfig.ledPin);
+    PARSE_BOOL(json, "buzzerEnabled", feedbackConfig.buzzerEnabled);
+    PARSE_NUM(json, "buzzerPin", feedbackConfig.buzzerPin);
+    PARSE_BOOL(json, "ledActiveHigh", feedbackConfig.ledActiveHigh);
+    PARSE_NUM(json, "beepFrequencyHz", feedbackConfig.beepFrequencyHz);
+    PARSE_NUM(json, "successBlinkDurationMs", feedbackConfig.successBlinkDurationMs);
+    PARSE_NUM(json, "errorBlinkDurationMs", feedbackConfig.errorBlinkDurationMs);
+
+    return changed;
+}
+
+bool ConfigService::parseHealthConfig(const JsonVariant &json)
+{
+    if (!json.is<JsonObject>())
+    {
+        return false;
+    }
+
+    bool changed{false};
+    auto &healthConfig{m_config.health};
+
+    PARSE_NUM(json, "healthCheckIntervalMs", healthConfig.healthCheckIntervalMs);
+    PARSE_NUM(json, "statusUpdateIntervalMs", healthConfig.statusUpdateIntervalMs);
+    PARSE_BOOL(json, "enabled", healthConfig.enabled);
+    PARSE_BOOL(json, "publishToMqtt", healthConfig.publishToMqtt);
+    PARSE_BOOL(json, "publishToLog", healthConfig.publishToLog);
+
+    return changed;
+}
+
+bool ConfigService::parseOtaConfig(const JsonVariant &json)
+{
+    if (!json.is<JsonObject>())
+    {
+        return false;
+    }
+
+    bool changed{false};
+    auto &otaConfig{m_config.ota};
+
+    PARSE_BOOL(json, "enabled", otaConfig.enabled);
+    PARSE_STR(json, "updateServerUrl", otaConfig.updateServerUrl);
+    PARSE_STR(json, "username", otaConfig.username);
+    PARSE_STR(json, "password", otaConfig.password);
+
+    return changed;
+}
+
+bool ConfigService::parsePowerConfig(const JsonVariant &json)
+{
+    if (!json.is<JsonObject>())
+    {
+        return false;
+    }
+
+    bool changed{false};
+    auto &powerConfig{m_config.power};
+
+    PARSE_NUM(json, "sleepIntervalMs", powerConfig.sleepIntervalMs);
+    PARSE_NUM(json, "maxDeepSleepMs", powerConfig.maxDeepSleepMs);
+    PARSE_NUM(json, "lightSleepDurationMs", powerConfig.lightSleepDurationMs);
+    PARSE_NUM(json, "idleTimeoutMs", powerConfig.idleTimeoutMs);
+    PARSE_BOOL(json, "enableTimerWakeup", powerConfig.enableTimerWakeup);
+    PARSE_BOOL(json, "enableNfcWakeup", powerConfig.enableNfcWakeup);
+    PARSE_NUM(json, "nfcWakeupPin", powerConfig.nfcWakeupPin);
+    PARSE_BOOL(json, "autoSleepEnabled", powerConfig.autoSleepEnabled);
+    PARSE_BOOL(json, "disableWiFiDuringSleep", powerConfig.disableWiFiDuringSleep);
+    PARSE_BOOL(json, "pn532SleepBetweenScans", powerConfig.pn532SleepBetweenScans);
+    PARSE_BOOL(json, "smartSleepEnabled", powerConfig.smartSleepEnabled);
+    PARSE_BOOL(json, "modemSleepOnMqttDisconnect", powerConfig.modemSleepOnMqttDisconnect);
+    PARSE_NUM(json, "modemSleepDurationMs", powerConfig.modemSleepDurationMs);
+    PARSE_NUM(json, "smartSleepShortThresholdMs", powerConfig.smartSleepShortThresholdMs);
+    PARSE_NUM(json, "smartSleepMediumThresholdMs", powerConfig.smartSleepMediumThresholdMs);
+    PARSE_NUM(json, "activityTypeMask", powerConfig.activityTypeMask);
+
+    return changed;
+}
+} // namespace isic
+
+// Cleanup macros
+#undef PARSE_STR
+#undef PARSE_NUM
+#undef PARSE_BOOL
