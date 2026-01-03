@@ -1,4 +1,4 @@
-# ISIC Project - Docker Test Environment
+# ISIC Project - MQTT Broker (Testing Environment)
 
 This folder contains Docker configuration for running a local MQTT broker for testing the ISIC hardware firmware.
 
@@ -12,27 +12,28 @@ This folder contains Docker configuration for running a local MQTT broker for te
 ### Start MQTT Broker
 
 ```bash
-cd docker
+cd tools/mqtt-broker
 docker-compose up -d
 ```
 
 ### Start with Debug Tools (includes MQTT Explorer web UI)
 
 ```bash
-cd docker
+cd tools/mqtt-broker
 docker-compose --profile debug up -d
 ```
 
 ### Stop Services
 
 ```bash
+cd tools/mqtt-broker
 docker-compose down
 ```
 
 ### View Logs
 
 ```bash
-# Follow mosquitto logs
+# Follow mosquitto logs (from tools/mqtt-broker directory)
 docker-compose logs -f mosquitto
 
 # Or read the log file directly
@@ -99,7 +100,7 @@ cfg.mqtt.port = 1883;
 ```
 
 > **Note**: Use your host machine's actual IP address (not `localhost`) when running
-> firmware on ESP32, as the device needs to reach the broker over the network.
+> firmware on ESP32 or ESP8266, as the device needs to reach the broker over the network.
 
 Find your IP:
 ```bash
@@ -108,29 +109,6 @@ ipconfig getifaddr en0
 
 # Linux
 hostname -I | awk '{print $1}'
-```
-
-## Topic Structure
-
-The ISIC firmware uses the following MQTT topic structure:
-
-```
-device/<device_id>/
-├── attendance          # Attendance records (single)
-├── attendance/batch    # Batched attendance records
-├── status              # Device online/offline status
-├── health              # Health check reports
-├── config/
-│   ├── set             # Receive config commands
-│   └── status          # Config acknowledgments
-├── ota/
-│   ├── set             # Receive OTA commands
-│   ├── status          # OTA state machine status
-│   ├── progress        # Download progress
-│   └── error           # Error messages
-├── pn532/status        # PN532 reader status
-├── metrics             # Performance metrics
-└── modules             # Module status
 ```
 
 ## Troubleshooting

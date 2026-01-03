@@ -218,7 +218,7 @@ void PowerService::handleRunningState()
 
 void PowerService::handleWifiConnected(const Event & /* event */)
 {
-    LOG_DEBUG(TAG, "WiFi connected");
+    LOG_DEBUG(m_name, "WiFi connected");
     m_wifiReady = true;
     recordActivityInternal(ActivityType::WifiConnected);
 
@@ -231,7 +231,7 @@ void PowerService::handleWifiConnected(const Event & /* event */)
 
 void PowerService::handleWifiDisconnected(const Event & /* event */)
 {
-    LOG_DEBUG(TAG, "WiFi disconnected");
+    LOG_DEBUG(m_name, "WiFi disconnected");
     m_wifiReady = false;
 
     // Back to Ready state if we were Running
@@ -243,7 +243,7 @@ void PowerService::handleWifiDisconnected(const Event & /* event */)
 
 void PowerService::handleMqttConnected(const Event & /* event */)
 {
-    LOG_DEBUG(TAG, "MQTT connected");
+    LOG_DEBUG(m_name, "MQTT connected");
     m_mqttReady = true;
     recordActivityInternal(ActivityType::MqttConnected);
 
@@ -257,7 +257,7 @@ void PowerService::handleMqttConnected(const Event & /* event */)
 
 void PowerService::handleMqttDisconnected(const Event & /* event */)
 {
-    LOG_DEBUG(TAG, "MQTT disconnected");
+    LOG_DEBUG(m_name, "MQTT disconnected");
     m_mqttReady = false;
 }
 
@@ -268,7 +268,7 @@ void PowerService::handleCardScanned(const Event & /* event */)
     // Cancel pending sleep on card scan
     if (m_sleepPending)
     {
-        LOG_DEBUG(TAG, "Card scan cancelled pending sleep");
+        LOG_DEBUG(m_name, "Card scan cancelled pending sleep");
         cancelSleepRequest();
     }
 }
@@ -299,7 +299,7 @@ PowerState PowerService::selectSmartSleepDepth()
     {
         // Short idle: use light sleep (WiFi stays connected)
         selectedState = PowerState::LightSleep;
-        LOG_DEBUG(TAG, "Smart sleep: light (estimated %ums idle)", estimatedIdleMs);
+        LOG_DEBUG(m_name, "Smart sleep: light (estimated %ums idle)", estimatedIdleMs);
     }
     else if (estimatedIdleMs < m_config.smartSleepMediumThresholdMs)
     {
@@ -307,12 +307,12 @@ PowerState PowerService::selectSmartSleepDepth()
         if (!m_mqttReady)
         {
             selectedState = PowerState::ModemSleep;
-            LOG_DEBUG(TAG, "Smart sleep: modem (MQTT down, %ums idle)", estimatedIdleMs);
+            LOG_DEBUG(m_name, "Smart sleep: modem (MQTT down, %ums idle)", estimatedIdleMs);
         }
         else
         {
             selectedState = PowerState::LightSleep;
-            LOG_DEBUG(TAG, "Smart sleep: light (MQTT up, %ums idle)", estimatedIdleMs);
+            LOG_DEBUG(m_name, "Smart sleep: light (MQTT up, %ums idle)", estimatedIdleMs);
         }
     }
     else
@@ -321,13 +321,13 @@ PowerState PowerService::selectSmartSleepDepth()
         if (canEnterSleep())
         {
             selectedState = PowerState::DeepSleep;
-            LOG_DEBUG(TAG, "Smart sleep: deep (%ums idle)", estimatedIdleMs);
+            LOG_DEBUG(m_name, "Smart sleep: deep (%ums idle)", estimatedIdleMs);
         }
         else
         {
             // Pending operations - use modem sleep
             selectedState = PowerState::ModemSleep;
-            LOG_DEBUG(TAG, "Smart sleep: modem (pending ops, %ums idle)", estimatedIdleMs);
+            LOG_DEBUG(m_name, "Smart sleep: modem (pending ops, %ums idle)", estimatedIdleMs);
         }
     }
 
@@ -456,7 +456,7 @@ void PowerService::enterLightSleepAsync(const std::uint32_t durationMs)
     // WiFiService will configure light sleep mode
     // Pn532Service will enter low-power mode
 
-    LOG_DEBUG(TAG, "Light sleep timer started");
+    LOG_DEBUG(m_name, "Light sleep timer started");
 }
 
 void PowerService::enterModemSleepAsync(const std::uint32_t durationMs)
@@ -594,7 +594,7 @@ void PowerService::checkChainedSleep()
 
 void PowerService::prepareForSleep(const PowerState state)
 {
-    LOG_DEBUG(TAG, "Preparing for %s", toString(state));
+    LOG_DEBUG(m_name, "Preparing for %s", toString(state));
 
     // TODO: notify services to prepare for sleep via event
 
@@ -615,7 +615,7 @@ void PowerService::saveToRtcMemory()
 {
     rtcData_.crc32 = calculateCrc32(rtcData_);
     platform::rtcUserMemoryWrite(0, reinterpret_cast<uint32_t *>(&rtcData_), sizeof(rtcData_));
-    LOG_DEBUG(TAG, "Saved RTC data");
+    LOG_DEBUG(m_name, "Saved RTC data");
 }
 
 bool PowerService::loadFromRtcMemory()
@@ -625,7 +625,7 @@ bool PowerService::loadFromRtcMemory()
 
     if (!loaded.isValid())
     {
-        LOG_DEBUG(TAG, "RTC data not valid (magic mismatch)");
+        LOG_DEBUG(m_name, "RTC data not valid (magic mismatch)");
         return false;
     }
 
@@ -703,7 +703,7 @@ void PowerService::recordActivityInternal(const ActivityType type)
 
     m_lastActivityMs = millis();
     m_metrics.lastActivityMs = m_lastActivityMs;
-    LOG_DEBUG(TAG, "Activity recorded: type=%d", static_cast<uint8_t>(type));
+    LOG_DEBUG(m_name, "Activity recorded: type=%d", static_cast<uint8_t>(type));
 }
 
 bool PowerService::isActivityTypeEnabled(const ActivityType type) const

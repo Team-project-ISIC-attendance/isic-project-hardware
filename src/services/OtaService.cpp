@@ -143,7 +143,7 @@ void OtaService::onOtaProgress(const std::size_t current, const std::size_t tota
     // Prevents flooding the event bus and serial output
     static uint8_t lastReported = 0;
     if (m_progress != lastReported && m_progress % 10 == 0) {
-        LOG_DEBUG(m_name, "OTA progress: %d%%", progress_);
+        LOG_DEBUG(m_name, "OTA progress: %d%%", m_progress);
         lastReported = m_progress;
 
         const Event event(EventType::OtaProgress, OtaProgressEvent {

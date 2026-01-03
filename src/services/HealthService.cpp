@@ -197,7 +197,7 @@ void HealthService::unregisterComponent(IHealthReporter *component)
                 m_components[i] = m_components[m_componentCount];
             }
             m_components[m_componentCount] = nullptr;
-            LOG_DEBUG(TAG, "Unregistered component, count=%u", m_componentCount);
+            LOG_DEBUG(m_name, "Unregistered component, count=%u", m_componentCount);
             return;
         }
     }

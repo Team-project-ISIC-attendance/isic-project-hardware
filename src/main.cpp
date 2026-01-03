@@ -2,6 +2,7 @@
 #include "App.hpp"
 #include "common/Logger.hpp"
 #include "platform/PlatformESP.hpp"
+#include "utils/FilesystemCommandHandler.hpp"
 
 #include <Arduino.h>
 
@@ -10,6 +11,10 @@ namespace
 constexpr auto TAG{"Main"};
 
 isic::App *app = nullptr;
+
+#ifdef ISIC_ENABLE_FS_INSPECTOR
+isic::utils::FilesystemCommandHandler fsHandler;
+#endif
 } // namespace
 
 void setup()
@@ -47,6 +52,11 @@ void setup()
 
 void loop()
 {
+#ifdef ISIC_ENABLE_FS_INSPECTOR
+    // Handle filesystem inspection commands
+    fsHandler.processSerialCommands();
+#endif
+
     if (app)
     {
         app->loop();

@@ -4,7 +4,8 @@
 
 ![C++17](https://img.shields.io/badge/C++-17-00599C?style=flat&logo=c%2B%2B)
 ![PlatformIO](https://img.shields.io/badge/PlatformIO-6.x-orange?style=flat&logo=platformio)
-![ESP8266](https://img.shields.io/badge/ESP8266-ESP12E-green?style=flat&logo=espressif)
+![ESP8266](https://img.shields.io/badge/ESP8266-ESP12F-green?style=flat&logo=espressif)
+![ESP32](https://img.shields.io/badge/ESP32-ESP32DevKit-blue?style=flat&logo=espressif)
 ![License](https://img.shields.io/badge/License-Proprietary-red)
 
 </div>
@@ -278,6 +279,21 @@ pio run -t upload -t monitor
 # Debug build
 pio run -e esp8266_debug
 ```
+
+### Testing with MQTT Broker
+
+For local development and testing, a Docker-based MQTT broker is available:
+
+```bash
+# Start local MQTT broker
+cd tools/mqtt-broker
+docker-compose up -d
+
+# View logs
+docker-compose logs -f mosquitto
+```
+
+See [tools/mqtt-broker/README.md](tools/mqtt-broker/README.md) for detailed MQTT testing instructions.
 
 ---
 

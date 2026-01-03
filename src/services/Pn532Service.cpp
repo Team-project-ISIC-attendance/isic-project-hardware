@@ -142,7 +142,7 @@ void Pn532Service::scanForCard()
     m_lastCardUidLength = uidLength;
     m_lastCardReadMs = millis();
 
-    LOG_DEBUG(TAG, "Card read: %s", cardUidToString(cardUid, uidLength).c_str());
+    LOG_DEBUG(m_name, "Card read: %s", cardUidToString(cardUid, uidLength).c_str());
 
     m_bus.publish({EventType::CardScanned,
                    CardEvent{
@@ -328,7 +328,7 @@ void Pn532Service::disableIrqWakeup()
 
 void Pn532Service::handlePowerStateChange(const PowerEvent &power)
 {
-    LOG_DEBUG(TAG, "PN532 power state change: %s -> %s", toString(power->previousState), toString(power->targetState));
+    LOG_DEBUG(m_name, "PN532 power state change: %s -> %s", toString(power.previousState), toString(power.targetState));
 
     switch (power.targetState)
     {
