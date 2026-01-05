@@ -5,7 +5,6 @@
 #include "core/EventBus.hpp"
 #include "core/IService.hpp"
 
-#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <vector>
 
@@ -13,9 +12,9 @@ namespace isic
 {
 class ConfigService : public ServiceBase
 {
-public:
     static constexpr auto *CONFIG_FILE{"/config.json"};
 
+public:
     explicit ConfigService(EventBus &bus);
     ~ConfigService() override;
 
@@ -78,7 +77,6 @@ public:
     [[nodiscard]] Status saveNow();
     [[nodiscard]] Status load();
     [[nodiscard]] Status reset();
-    [[nodiscard]] Status updateFromJson(const char *json);
 
     [[nodiscard]] bool isConfigured() const noexcept
     {
@@ -90,18 +88,8 @@ public:
     }
 
 private:
-    void handleConfigMessage(const std::string& topic, const std::string& payload);
-
-    bool parseJson(const char *json);
-    bool parseWifiConfig(const JsonVariant &json);
-    bool parseMqttConfig(const JsonVariant &json);
-    bool parseDeviceConfig(const JsonVariant &json);
-    bool parsePn532Config(const JsonVariant &json);
-    bool parseAttendanceConfig(const JsonVariant &json);
-    bool parseFeedbackConfig(const JsonVariant &json);
-    bool parseHealthConfig(const JsonVariant &json);
-    bool parseOtaConfig(const JsonVariant &json);
-    bool parsePowerConfig(const JsonVariant &json);
+    void handleSetConfigMessage(const std::string &topic, const std::string &payload);
+    void handleGetConfigMessage(const std::string &topic);
 
     EventBus &m_bus;
     Config m_config{};
