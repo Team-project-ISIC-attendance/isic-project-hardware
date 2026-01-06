@@ -53,7 +53,7 @@ struct MqttConfig
 {
     struct Constants
     {
-        static constexpr auto kMaxPayloadSizeBytes{1024};
+        static constexpr auto kMaxPayloadSizeBytes{4024};
     };
     static constexpr auto kDefaultBrokerPort{1883};
     static constexpr auto kDefaultBaseTopic{"device"};

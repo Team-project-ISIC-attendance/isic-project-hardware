@@ -526,7 +526,7 @@ ConfigService::ConfigService(EventBus &bus)
     , m_bus(bus)
 {
 
-    m_eventConnections.reserve(2);
+    m_eventConnections.reserve(3);
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
         m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = "config/set/#"}});
         m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = "config/get/#"}});
@@ -544,6 +544,9 @@ ConfigService::ConfigService(EventBus &bus)
             }
         }
     }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event &) {
+       (void)save();
+   }));
 }
 
 ConfigService::~ConfigService()
