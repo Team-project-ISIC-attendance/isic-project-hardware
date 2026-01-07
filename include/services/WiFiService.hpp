@@ -17,7 +17,7 @@ class ConfigService;
 class WiFiService : public ServiceBase
 {
 public:
-    WiFiService(EventBus &bus, ConfigService &config);
+    WiFiService(EventBus &bus, ConfigService &configService, AsyncWebServer &webServer);
     ~WiFiService() override = default;
 
     WiFiService(const WiFiService&) = delete;
@@ -47,12 +47,6 @@ public:
         return m_wifiState == WiFiState::ApMode;
     }
 
-    // Provide access to web server for OTA service
-    AsyncWebServer& getWebServer()
-    {
-        return m_webServer;
-    }
-
 private:
     void startApMode();
     void stopApMode();
@@ -77,10 +71,10 @@ private:
     void handlePowerStateChange(const Event &event);
 
     EventBus &m_bus;
-    const WiFiConfig &m_config;
-    Config& m_systemConfig;
+    const WiFiConfig &m_config; // cashed reference to WiFi config
+    ConfigService &m_configService;
 
-    AsyncWebServer m_webServer{80};
+    AsyncWebServer& m_webServer;
     DNSServer m_dnsServer;
 
     WiFiState m_wifiState{WiFiState::Disconnected};
@@ -89,23 +83,15 @@ private:
 
     std::uint32_t m_lastReconnectAttemptMs{0};
     std::uint32_t m_connectAttempts{0};
+    std::uint32_t m_lastDisconnectMs{0};
     std::uint32_t m_apStartMs{0};
     std::uint8_t m_connectRetries{0};
     bool m_inSlowRetryMode{false};
     bool m_hasEverConnected{false};
-
-    WiFiMetrics m_metrics{};
-
-    bool m_webServerStarted{false};
     bool m_apActive{false};
-
-    std::uint32_t m_lastDisconnectMs{0};
-    bool m_waitingForRetry{false};
-
     bool m_timeSyncStarted{false};
 
-    bool m_rebootPending{false};
-    std::uint32_t m_rebootRequestedMs{0};
+    WiFiMetrics m_metrics{};
 
     std::vector<EventBus::ScopedConnection> m_eventConnections;
 };

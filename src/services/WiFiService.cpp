@@ -244,12 +244,13 @@ constexpr char CONFIG_HTML[] PROGMEM = R"(
 )";
 } // namespace
 
-WiFiService::WiFiService(EventBus &bus, ConfigService &config)
+WiFiService::WiFiService(EventBus &bus, ConfigService &config, AsyncWebServer &webServer)
     : ServiceBase("WiFiService")
     , m_bus(bus)
     , m_config(config.getWifiConfig())
-    , m_systemConfig(config.getMutable())
-    , m_hasEverConnected(m_config.stationHasEverConnected) // Load from config
+    , m_configService(config)
+    , m_webServer(webServer)
+    , m_hasEverConnected(m_config.stationHasEverConnected)
 {
     m_eventConnections.reserve(2);
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::PowerStateChange, [this](const Event &e) {
@@ -396,6 +397,40 @@ void WiFiService::stopApMode()
     m_bus.publish(EventType::WifiApStopped);
 }
 
+void WiFiService::setupWebServer()
+{
+    // Configuration page
+    m_webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send_P(200, "text/html", CONFIG_HTML);
+    });
+
+    // Captive portal detection endpoints
+    m_webServer.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->redirect("/");
+    });
+    m_webServer.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->redirect("/");
+    });
+    m_webServer.on("/fwlink", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->redirect("/");
+    });
+
+    // WiFi scan endpoint
+    m_webServer.on("/scan", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        handleScanNetworks(request);
+    });
+
+    // Save configuration endpoint
+    m_webServer.on("/save", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        handleSaveConfig(request);
+    });
+
+    // Status endpoint
+    m_webServer.on("/status", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        handleStatus(request);
+    });
+}
+
 void WiFiService::connectToStation()
 {
     if (!m_config.isConfigured())
@@ -506,8 +541,9 @@ void WiFiService::onConnected()
 
     if (wasFirstConnection)
     {
-        m_systemConfig.wifi.stationHasEverConnected = true;
-        m_bus.publish(EventType::ConfigChanged);
+        m_configService.update([](Config &cfg) {
+            cfg.wifi.stationHasEverConnected = true;
+        });
         LOG_INFO(m_name, "First successful WiFi connection - flag persisted to config");
     }
 
@@ -544,42 +580,6 @@ void WiFiService::onDisconnected()
     LOG_WARN(m_name, "WiFi disconnected - service now Ready (will reconnect)");
 
     m_bus.publish(EventType::WifiDisconnected);
-}
-
-void WiFiService::setupWebServer()
-{
-    // Configuration page
-    m_webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send_P(200, "text/html", CONFIG_HTML);
-    });
-
-    // Captive portal detection endpoints
-    m_webServer.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->redirect("/");
-    });
-    m_webServer.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->redirect("/");
-    });
-    m_webServer.on("/fwlink", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->redirect("/");
-    });
-
-    // WiFi scan endpoint
-    m_webServer.on("/scan", HTTP_GET, [this](AsyncWebServerRequest *request) {
-        handleScanNetworks(request);
-    });
-
-    // Save configuration endpoint
-    m_webServer.on("/save", HTTP_POST, [this](AsyncWebServerRequest *request) {
-        handleSaveConfig(request);
-    });
-
-    // Status endpoint
-    m_webServer.on("/status", HTTP_GET, [this](AsyncWebServerRequest *request) {
-        handleStatus(request);
-    });
-
-    m_webServer.begin();
 }
 
 void WiFiService::handleScanNetworks(AsyncWebServerRequest *request)
@@ -629,53 +629,51 @@ void WiFiService::handleSaveConfig(AsyncWebServerRequest *request)
         return;
     }
 
-    // TODO: i dont like use raw config change it must use service so fuck this shit
-    m_systemConfig.wifi.stationSsid = ssid.c_str();
-    m_systemConfig.wifi.stationPassword = password.c_str();
+    // Update configuration using generic update method
+    m_configService.update([&](Config &cfg) {
+        // Update WiFi configuration
+        cfg.wifi.stationSsid = ssid.c_str();
+        cfg.wifi.stationPassword = password.c_str();
 
-    // MQTT configuration (optional)
-    if (request->hasParam("mqtt_broker", true))
-    {
-        if (const auto broker{request->getParam("mqtt_broker", true)->value()}; !broker.isEmpty())
+        // Update MQTT configuration (optional)
+        if (request->hasParam("mqtt_broker", true))
         {
-            m_systemConfig.mqtt.brokerAddress = broker.c_str();
-            LOG_INFO(m_name, "MQTT broker updated: %s", broker.c_str());
+            if (const auto broker{request->getParam("mqtt_broker", true)->value()}; !broker.isEmpty())
+            {
+                cfg.mqtt.brokerAddress = broker.c_str();
+                LOG_INFO(m_name, "MQTT broker updated: %s", broker.c_str());
+            }
         }
-    }
-    if (request->hasParam("mqtt_port", true))
-    {
-        m_systemConfig.mqtt.port = request->getParam("mqtt_port", true)->value().toInt();
-    }
-    if (request->hasParam("mqtt_username", true))
-    {
-        m_systemConfig.mqtt.username = request->getParam("mqtt_username", true)->value().c_str();
-    }
-    if (request->hasParam("mqtt_password", true))
-    {
-        m_systemConfig.mqtt.password = request->getParam("mqtt_password", true)->value().c_str();
-    }
-    if (request->hasParam("mqtt_base_topic", true))
-    {
-        if (const auto topic = request->getParam("mqtt_base_topic", true)->value(); !topic.isEmpty())
+        if (request->hasParam("mqtt_port", true))
         {
-            m_systemConfig.mqtt.baseTopic = topic.c_str();
+            cfg.mqtt.port = request->getParam("mqtt_port", true)->value().toInt();
         }
-    }
+        if (request->hasParam("mqtt_username", true))
+        {
+            cfg.mqtt.username = request->getParam("mqtt_username", true)->value().c_str();
+        }
+        if (request->hasParam("mqtt_password", true))
+        {
+            cfg.mqtt.password = request->getParam("mqtt_password", true)->value().c_str();
+        }
+        if (request->hasParam("mqtt_base_topic", true))
+        {
+            if (const auto topic = request->getParam("mqtt_base_topic", true)->value(); !topic.isEmpty())
+            {
+                cfg.mqtt.baseTopic = topic.c_str();
+            }
+        }
+    });
 
-    // save(); from service is new i add it after all this shit so in future use it TODO: fix
-    // Notify other services that configuration has changed
-    m_bus.publish(EventType::ConfigChanged);
+    request->send(200, "application/json", R"({"status":"saved","message":"Connecting to WiFi..."})");
 
-    request->send(200, "application/json", R"({"status":"saved","message":"Rebooting in 5 seconds..."})");
+    LOG_INFO(m_name, "Config saved (WiFi: %s, MQTT: %s), transitioning from AP mode to station mode",
+             m_configService.getWifiConfig().stationSsid.c_str(),
+             m_configService.getMqttConfig().brokerAddress.empty() ? "not configured" : m_configService.getMqttConfig().brokerAddress.c_str());
 
-    LOG_INFO(m_name, "Config saved (WiFi: %s, MQTT: %s), scheduling reboot in %ums to reinitialize all modules",
-             m_systemConfig.wifi.stationSsid.c_str(),
-             m_systemConfig.mqtt.brokerAddress.empty() ? "not configured" : m_systemConfig.mqtt.brokerAddress.c_str(),
-             WiFiConfig::Constants::kSystemRebootDelayMs);
-
-    // Schedule reboot to ensure all modules (WiFi, MQTT, etc) reinitialize with new config
-    m_rebootPending = true;
-    m_rebootRequestedMs = millis();
+    // Stop AP mode and connect to the configured network
+    stopApMode();
+    connectToStation();
 }
 
 void WiFiService::handleStatus(AsyncWebServerRequest *request)
@@ -701,44 +699,6 @@ void WiFiService::handleStatus(AsyncWebServerRequest *request)
     String json;
     serializeJson(doc, json);
     request->send(200, "application/json", json);
-}
-
-void WiFiService::handlePowerStateChange(const Event &event)
-{
-    const auto *power{event.get<PowerEvent>()};
-    if (!power)
-    {
-        return;
-    }
-
-    LOG_DEBUG(m_name, "Power state change: %s -> %s", toString(power->previousState), toString(power->targetState));
-
-    switch (power->targetState)
-    {
-        case PowerState::LightSleep: {
-            // Light sleep: configure WiFi for light sleep mode
-            platform::setWiFiLightSleep();
-            LOG_INFO(m_name, "WiFi configured for light sleep");
-            break;
-        }
-        case PowerState::ModemSleep:
-        case PowerState::DeepSleep:
-        case PowerState::Hibernating: {
-            // Full sleep: disconnect and power down WiFi
-            enterPowerSleep();
-            break;
-        }
-        case PowerState::Active: {
-            // Waking up: restore WiFi if was in modem sleep
-            if (power->previousState == PowerState::ModemSleep)
-            {
-                wakeFromPowerSleep();
-            }
-            break;
-        }
-        default:
-            break;
-    }
 }
 
 void WiFiService::enterPowerSleep()
@@ -777,6 +737,44 @@ void WiFiService::wakeFromPowerSleep()
     {
         // Start AP mode if not configured
         startApMode();
+    }
+}
+
+void WiFiService::handlePowerStateChange(const Event &event)
+{
+    const auto *power{event.get<PowerEvent>()};
+    if (!power)
+    {
+        return;
+    }
+
+    LOG_DEBUG(m_name, "Power state change: %s -> %s", toString(power->previousState), toString(power->targetState));
+
+    switch (power->targetState)
+    {
+        case PowerState::LightSleep: {
+            // Light sleep: configure WiFi for light sleep mode
+            platform::setWiFiLightSleep();
+            LOG_INFO(m_name, "WiFi configured for light sleep");
+            break;
+        }
+        case PowerState::ModemSleep:
+        case PowerState::DeepSleep:
+        case PowerState::Hibernating: {
+            // Full sleep: disconnect and power down WiFi
+            enterPowerSleep();
+            break;
+        }
+        case PowerState::Active: {
+            // Waking up: restore WiFi if was in modem sleep
+            if (power->previousState == PowerState::ModemSleep)
+            {
+                wakeFromPowerSleep();
+            }
+            break;
+        }
+        default:
+            break;
     }
 }
 } // namespace isic

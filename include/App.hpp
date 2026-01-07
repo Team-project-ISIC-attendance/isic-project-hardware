@@ -15,6 +15,7 @@
 #include "services/WiFiService.hpp"
 
 #include <TaskSchedulerDeclarations.h>
+#include <ESPAsyncWebServer.h>
 
 namespace isic
 {
@@ -94,6 +95,7 @@ public:
 
 private:
     void setupScheduler();
+    void startWebServer();
 
     // Static callbacks for TaskScheduler
     static constexpr uint32_t EVENTBUS_INTERVAL_MS = 10; // High priority: 100Hz event dispatch
@@ -109,6 +111,7 @@ private:
 
     Scheduler m_scheduler;
     EventBus m_eventBus;
+    AsyncWebServer m_webServer;
 
     ConfigService m_configService;
     WiFiService m_wifiService;

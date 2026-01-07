@@ -87,6 +87,14 @@ public:
         return m_dirty;
     }
 
+    template<typename UpdateFunc>
+    void update(UpdateFunc&& func)
+    {
+        func(m_config);
+        (void)save(); // must be always successful
+        m_bus.publish(EventType::ConfigChanged);
+    }
+
 private:
     void handleSetConfigMessage(const std::string &topic, const std::string &payload);
     void handleGetConfigMessage(const std::string &topic);

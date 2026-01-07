@@ -8,11 +8,11 @@ namespace isic
 constexpr auto *TAG{"App"};
 
 App::App()
-    : m_eventBus()
+    : m_webServer(80)
     , m_configService(m_eventBus)
-    , m_wifiService(m_eventBus, m_configService)
+    , m_wifiService(m_eventBus, m_configService, m_webServer)
     , m_mqttService(m_eventBus, m_configService.get().mqtt, m_configService.get().device)
-    , m_otaService(m_eventBus, m_configService.get().ota, m_wifiService.getWebServer())  // Share web server
+    , m_otaService(m_eventBus, m_configService.get().ota, m_webServer)
     , m_pn532Service(m_eventBus, m_configService.get())
     , m_attendanceService(m_eventBus, m_configService.getMutable().attendance)
     , m_feedbackService(m_eventBus, m_configService.getMutable().feedback)
@@ -37,7 +37,14 @@ Status App::begin()
         return status;
     }
 
-    // Initialize WiFi (may start in AP mode)
+    // Initialize OTA early (before WiFi) so routes are registered before web server starts
+    status = m_otaService.begin();
+    if (status.failed())
+    {
+        LOG_WARN(TAG, "OtaService init failed - continuing without OTA");
+    }
+
+    // Initialize WiFi (may start in AP mode and begin web server)
     status = m_wifiService.begin();
     if (status.failed())
     {
@@ -99,13 +106,6 @@ Status App::begin()
         LOG_WARN(TAG, "HealthService init failed - continuing without health monitoring");
     }
 
-    // Initialize OTA (non-critical, can be deferred)
-    status = m_otaService.begin();
-    if (status.failed())
-    {
-        LOG_WARN(TAG, "OtaService init failed - continuing without OTA");
-    }
-
     // Register services with health monitor (after all services initialized)
     m_healthService.registerComponent(&m_configService);
     m_healthService.registerComponent(&m_wifiService);
@@ -115,6 +115,9 @@ Status App::begin()
     m_healthService.registerComponent(&m_powerService);
     m_healthService.registerComponent(&m_feedbackService);
     m_healthService.registerComponent(&m_otaService);
+
+    // Start web server after all services have registered their routes
+    startWebServer();
 
     // Setup scheduler tasks
     setupScheduler();
@@ -235,5 +238,25 @@ void App::setupScheduler()
     m_powerTask.enable();
 
     LOG_DEBUG(TAG, "Scheduler configured with %d tasks", 10);
+}
+
+void App::startWebServer()
+{
+    // Start the shared web server after all services have registered their routes
+    // This ensures:
+    // 1. OTA routes (/update) are registered
+    // 2. WiFi routes (/, /scan, /save, /status) are registered if in AP mode
+    // 3. Any future service routes are also registered
+
+    m_webServer.begin();
+    LOG_INFO(TAG, "Web server started on port 80");
+    LOG_INFO(TAG, "Available endpoints:");
+
+    LOG_INFO(TAG, "  - / (WiFi configuration portal)");
+    LOG_INFO(TAG, "  - /scan (WiFi network scan)");
+    LOG_INFO(TAG, "  - /save (Save configuration)");
+    LOG_INFO(TAG, "  - /status (WiFi status)");
+
+    LOG_INFO(TAG, "  - /update (OTA firmware update - ACTIVE)");
 }
 } // namespace isic

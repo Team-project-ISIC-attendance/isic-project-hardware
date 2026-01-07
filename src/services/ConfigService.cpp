@@ -532,7 +532,7 @@ ConfigService::ConfigService(EventBus &bus)
     , m_bus(bus)
 {
 
-    m_eventConnections.reserve(3);
+    m_eventConnections.reserve(2);
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
         m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = "config/set/#"}});
         m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = "config/get/#"}});
@@ -550,16 +550,13 @@ ConfigService::ConfigService(EventBus &bus)
             }
         }
     }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event &) {
-       (void)save();
-   }));
 }
 
 ConfigService::~ConfigService()
 {
     if (m_dirty)
     {
-        (void) save(); // TODO: handle failure? i think in destructor we can't do much about it so just ignore
+        (void) saveNow(); // TODO: handle failure? i think in destructor we can't do much about it so just ignore
     }
 }
 
@@ -591,7 +588,7 @@ Status ConfigService::begin()
             LittleFS.remove(CONFIG_FILE);
         }
 
-        (void) save(); // TODO: handle failure?
+        (void) saveNow(); // TODO: handle failure?
     }
 
     setState(ServiceState::Running);
@@ -603,7 +600,7 @@ void ConfigService::loop()
 {
     if (m_dirty)
     {
-        (void) save(); // TODO: handle failure?
+        (void) saveNow(); // TODO: handle failure?
         m_dirty = false;
     }
 }
@@ -612,7 +609,7 @@ void ConfigService::end()
 {
     if (m_dirty)
     {
-        (void) save(); // TODO: handle failure?
+        (void) saveNow(); // TODO: handle failure?
     }
 
     m_eventConnections.clear();
@@ -620,6 +617,12 @@ void ConfigService::end()
 }
 
 Status ConfigService::save()
+{
+    m_dirty = true;
+    return Status::Ok();
+}
+
+Status ConfigService::saveNow()
 {
     LOG_DEBUG(m_name, "Saving to %s", CONFIG_FILE);
 
@@ -643,11 +646,6 @@ Status ConfigService::save()
     LOG_INFO(m_name, "Saved (%u bytes)", written);
     m_dirty = false;
     return Status::Ok();
-}
-
-Status ConfigService::saveNow()
-{
-    return save();
 }
 
 Status ConfigService::load()
@@ -691,7 +689,7 @@ Status ConfigService::reset()
     LOG_INFO(m_name, "Resetting to defaults");
     m_config.restoreDefaults();
 
-    const auto status{save()}; // TODO: handle failure?
+    const auto status{saveNow()}; // TODO: handle failure?
     m_bus.publish(EventType::ConfigChanged);
 
     return status;
