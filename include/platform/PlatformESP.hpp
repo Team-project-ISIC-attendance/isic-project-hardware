@@ -5,6 +5,22 @@
 #include <ctime>
 #include <optional>
 
+namespace isic::platform
+{
+inline std::optional<std::uint64_t> getUnixTimeMs()
+{
+    const auto nowSec{static_cast<std::int64_t>(time(nullptr))};
+
+    // Consider time valid only after SNTP sets it (pick a sane epoch threshold: 2020-09-13)
+    if (nowSec <= 1'600'000'000)
+    {
+        return std::nullopt;
+    }
+
+    return static_cast<std::uint64_t>(nowSec) * 1000ULL + static_cast<std::uint64_t>(millis() % 1000);
+}
+}
+
 #if defined(ARDUINO_ARCH_ESP32) || defined(ISIC_PLATFORM_ESP32)
 
 #include <esp_sleep.h>
@@ -61,18 +77,6 @@ inline void deepSleep(const std::uint64_t sleepUs)
     esp_sleep_enable_timer_wakeup(sleepUs);
     esp_deep_sleep_start();
 }
-
-inline std::optional<std::uint64_t> getUnixTimeMs()
-{
-    const auto nowSec{static_cast<std::int64_t>(time(nullptr))};
-    // Consider time valid only after SNTP sets it (pick a sane epoch threshold: 2020-09-13)
-    if (nowSec <= 1'600'000'000)
-    {
-        return std::nullopt;
-    }
-    return static_cast<std::uint64_t>(nowSec) * 1000ULL + static_cast<std::uint64_t>(millis() % 1000);
-}
-
 }
 
 #elif defined(ARDUINO_ARCH_ESP8266) || defined(ISIC_PLATFORM_ESP8266)
@@ -113,18 +117,6 @@ inline void deepSleep(const std::uint64_t sleepUs, const int mode = WAKE_RF_DEFA
 {
     EspClass::deepSleep(sleepUs, static_cast<RFMode>(mode));
 }
-
-inline std::optional<std::uint64_t> getUnixTimeMs()
-{
-    const auto nowSec{static_cast<std::int64_t>(time(nullptr))};
-    // Consider time valid only after SNTP sets it (pick a sane epoch threshold: 2020-09-13)
-    if (nowSec <= 1'600'000'000)
-    {
-        return std::nullopt;
-    }
-    return static_cast<std::uint64_t>(nowSec) * 1000ULL + static_cast<std::uint64_t>(millis() % 1000);
-}
-
 }
 
 #else

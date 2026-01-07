@@ -10,11 +10,13 @@ struct WiFiConfig
     struct Constants
     {
         static constexpr auto kSystemRebootDelayMs{5'000};
-        static constexpr auto kStationReconnectIntervalMs{5'000};
     };
     static constexpr auto kStationConnectRetryDelayMs{500};
     static constexpr auto kStationConnectionTimeoutMs{10'000};
-    static constexpr auto kStationMaxConnectionAttempts{20};
+    static constexpr auto kStationMaxFastConnectionAttempts{10};
+    static constexpr auto kStationFastReconnectIntervalMs{5'000};
+    static constexpr auto kStationSlowReconnectIntervalMs{600'000};
+    static constexpr auto kStationHasEverConnected{false};
     static constexpr auto kStationPowerSaveEnabled{false};
     static constexpr auto kAccessPointSsidPrefix{"ISIC-Setup-"};
     static constexpr auto kAccessPointDefaultPassword{"isic1234"};
@@ -24,7 +26,10 @@ struct WiFiConfig
     std::string stationPassword{};
     std::uint32_t stationConnectRetryDelayMs{kStationConnectRetryDelayMs};
     std::uint32_t stationConnectionTimeoutMs{kStationConnectionTimeoutMs};
-    std::uint8_t stationMaxConnectionAttempts{kStationMaxConnectionAttempts};
+    std::uint32_t stationFastReconnectIntervalMs{kStationFastReconnectIntervalMs};
+    std::uint32_t stationSlowReconnectIntervalMs{kStationSlowReconnectIntervalMs};
+    std::uint8_t stationMaxFastConnectionAttempts{kStationMaxFastConnectionAttempts};
+    bool stationHasEverConnected{kStationHasEverConnected};
     bool stationPowerSaveEnabled{kStationPowerSaveEnabled};
     std::string accessPointSsidPrefix{kAccessPointSsidPrefix};
     std::string accessPointPassword{kAccessPointDefaultPassword};
@@ -41,8 +46,11 @@ struct WiFiConfig
         stationPassword.clear();
         stationConnectRetryDelayMs = kStationConnectRetryDelayMs;
         stationConnectionTimeoutMs = kStationConnectionTimeoutMs;
-        stationMaxConnectionAttempts = kStationMaxConnectionAttempts;
+        stationFastReconnectIntervalMs = kStationFastReconnectIntervalMs;
+        stationSlowReconnectIntervalMs = kStationSlowReconnectIntervalMs;
+        stationMaxFastConnectionAttempts = kStationMaxFastConnectionAttempts;
         stationPowerSaveEnabled = kStationPowerSaveEnabled;
+        stationHasEverConnected = kStationHasEverConnected;
         accessPointSsidPrefix = kAccessPointSsidPrefix;
         accessPointPassword = kAccessPointDefaultPassword;
         accessPointModeTimeoutMs = kAccessPointModeTimeoutMs;
@@ -171,10 +179,10 @@ struct AttendanceConfig
     };
 
     static constexpr auto kDefaultDebounceIntervalMs{2'000};
-    static constexpr auto kDefaultBatchMaxSize{20};
+    static constexpr auto kDefaultBatchMaxSize{10};
+    static constexpr auto kDefaultOfflineBufferSize{20};
     static constexpr auto kDefaultBatchFlushIntervalMs{30'000};
     static constexpr auto kDefaultBatchingEnabled{true};
-    static constexpr auto kDefaultOfflineBufferSize{50};
     static constexpr auto kDefaultOfflineBufferFlushIntervalMs{5'000};
     static constexpr auto kDefaultOfflineQueuePolicy{OfflineQueuePolicy::DropOldest};
 

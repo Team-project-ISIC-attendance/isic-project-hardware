@@ -12,10 +12,12 @@
 
 namespace isic
 {
+class ConfigService;
+
 class WiFiService : public ServiceBase
 {
 public:
-    WiFiService(EventBus &bus, const WiFiConfig &config, Config& systemConfig);
+    WiFiService(EventBus &bus, ConfigService &config);
     ~WiFiService() override = default;
 
     WiFiService(const WiFiService&) = delete;
@@ -45,6 +47,12 @@ public:
         return m_wifiState == WiFiState::ApMode;
     }
 
+    // Provide access to web server for OTA service
+    AsyncWebServer& getWebServer()
+    {
+        return m_webServer;
+    }
+
 private:
     void startApMode();
     void stopApMode();
@@ -63,8 +71,6 @@ private:
     void handleScanNetworks(AsyncWebServerRequest *request);
     void handleSaveConfig(AsyncWebServerRequest *request);
     void handleStatus(AsyncWebServerRequest *request);
-
-    [[nodiscard]] String getConfigPageHtml() const;
 
     void enterPowerSleep();
     void wakeFromPowerSleep();
@@ -85,6 +91,8 @@ private:
     std::uint32_t m_connectAttempts{0};
     std::uint32_t m_apStartMs{0};
     std::uint8_t m_connectRetries{0};
+    bool m_inSlowRetryMode{false};
+    bool m_hasEverConnected{false};
 
     WiFiMetrics m_metrics{};
 

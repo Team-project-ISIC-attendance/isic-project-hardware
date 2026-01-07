@@ -10,9 +10,9 @@ constexpr auto *TAG{"App"};
 App::App()
     : m_eventBus()
     , m_configService(m_eventBus)
-    , m_wifiService(m_eventBus, m_configService.get().wifi, m_configService.getMutable())
+    , m_wifiService(m_eventBus, m_configService)
     , m_mqttService(m_eventBus, m_configService.get().mqtt, m_configService.get().device)
-    , m_otaService(m_eventBus, m_configService.get().ota)
+    , m_otaService(m_eventBus, m_configService.get().ota, m_wifiService.getWebServer())  // Share web server
     , m_pn532Service(m_eventBus, m_configService.get())
     , m_attendanceService(m_eventBus, m_configService.getMutable().attendance)
     , m_feedbackService(m_eventBus, m_configService.getMutable().feedback)
@@ -21,6 +21,7 @@ App::App()
 {
     LOG_INFO(TAG, "ISIC Attendance System");
     LOG_INFO(TAG, "Firmware: %s", DeviceConfig::Constants::kFirmwareVersion);
+    LOG_INFO(TAG, "Post-construction heap: %u bytes", ESP.getFreeHeap());
 }
 Status App::begin()
 {
@@ -71,6 +72,16 @@ Status App::begin()
         return status;
     }
 
+    // Initialize power management EARLY (before heavy services)
+    // PowerService has 7 event subscriptions - initialize it before heap gets fragmented
+    status = m_powerService.begin();
+    if (status.failed())
+    {
+        LOG_ERROR(TAG, "PowerService init failed");
+        m_appState = AppState::Error;
+        return status;
+    }
+
     // Initialize feedback
     status = m_feedbackService.begin();
     if (status.failed())
@@ -78,14 +89,17 @@ Status App::begin()
         LOG_WARN(TAG, "FeedbackService init failed - continuing without feedback");
     }
 
-    // Initialize health monitoring
+    // Allow heap to stabilize before non-critical services
+    yield();
+
+    // Initialize health monitoring (non-critical for boot)
     status = m_healthService.begin();
     if (status.failed())
     {
         LOG_WARN(TAG, "HealthService init failed - continuing without health monitoring");
     }
 
-    // Initialize OTA
+    // Initialize OTA (non-critical, can be deferred)
     status = m_otaService.begin();
     if (status.failed())
     {
@@ -98,16 +112,9 @@ Status App::begin()
     m_healthService.registerComponent(&m_mqttService);
     m_healthService.registerComponent(&m_pn532Service);
     m_healthService.registerComponent(&m_attendanceService);
+    m_healthService.registerComponent(&m_powerService);
     m_healthService.registerComponent(&m_feedbackService);
     m_healthService.registerComponent(&m_otaService);
-    m_healthService.registerComponent(&m_powerService);
-
-    // Initialize power management (early to detect wakeup reason)
-    status = m_powerService.begin();
-    if (status.failed())
-    {
-        LOG_WARN(TAG, "PowerService init failed - continuing without power management");
-    }
 
     // Setup scheduler tasks
     setupScheduler();

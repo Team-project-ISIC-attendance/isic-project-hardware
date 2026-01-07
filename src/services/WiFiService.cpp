@@ -5,444 +5,13 @@
 #include "services/ConfigService.hpp"
 
 #include <ArduinoJson.h>
-#include <time.h>
 
 namespace isic
 {
-WiFiService::WiFiService(EventBus &bus, const WiFiConfig &config, Config &systemConfig)
-    : ServiceBase("WiFiService")
-    , m_bus(bus)
-    , m_config(config)
-    , m_systemConfig(systemConfig)
+namespace
 {
-    m_eventConnections.reserve(2);
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event &e) {
-        LOG_INFO(m_name, "Config changed, checking WiFi");
-    }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::PowerStateChange, [this](const Event &e) {
-        handlePowerStateChange(e);
-    }));
-}
-
-Status WiFiService::begin()
-{
-    setState(ServiceState::Initializing);
-    LOG_INFO(m_name, "Initializing WiFiService...");
-
-    WiFi.persistent(false); // non use static :persistent not works in esp32
-    WiFi.mode(WIFI_OFF);
-    delay(100); // TODO: need fix this is brief delay for WiFi hardware reset - unavoidable during initialization
-
-    if (!m_config.isConfigured())
-    {
-        LOG_INFO(m_name, "WiFi not configured, starting AP mode");
-        startApMode();
-        // AP mode is operational - transition to Running
-        setState(ServiceState::Running);
-        return Status::Ok();
-    }
-
-    LOG_INFO(m_name, "Connecting to %s...", m_config.stationSsid.c_str());
-    connectToStation();
-
-    setState(ServiceState::Ready);
-    LOG_INFO(m_name, "Ready (waiting for WiFi connection)");
-    return Status::Ok();
-}
-
-void WiFiService::loop()
-{
-    if (m_state != ServiceState::Ready && m_state != ServiceState::Running)
-    {
-        return;
-    }
-
-    // Check for pending reboot (non-blocking delay)
-    if (m_rebootPending)
-    {
-        if (millis() - m_rebootRequestedMs >= WiFiConfig::Constants::kSystemRebootDelayMs)
-        {
-            LOG_INFO(m_name, "Rebooting now...");
-            ESP.restart(); //  non use static :restart not works in esp32
-        }
-        return;
-    }
-
-    switch (m_wifiState)
-    {
-        case WiFiState::Connecting: {
-            handleConnecting();
-            break;
-        }
-        case WiFiState::Connected: {
-            handleConnected();
-            break;
-        }
-        case WiFiState::ApMode: {
-            // AP mode handling - DNS server is non-blocking
-            m_dnsServer.processNextRequest();
-            break;
-        }
-        case WiFiState::Disconnected: {
-            handleDisconnected();
-            break;
-        }
-        case WiFiState::WaitingRetry: {
-            // Non-blocking retry delay
-            if (millis() - m_lastDisconnectMs >= 100)
-            {
-                connectToStation();
-            }
-            break;
-        }
-        default: {
-            break;
-        }
-    }
-}
-
-void WiFiService::end()
-{
-    setState(ServiceState::Stopping);
-    LOG_INFO(m_name, "Shutting down...");
-
-    if (WiFi.status() == WL_CONNECTED)
-    {
-        WiFi.disconnect();
-    }
-    if (m_apActive)
-    {
-        stopApMode();
-    }
-
-    WiFi.mode(WIFI_OFF);
-    m_wifiState = WiFiState::Disconnected;
-
-    setState(ServiceState::Stopped);
-    LOG_INFO(m_name, "Stopped");
-}
-
-void WiFiService::startApMode()
-{
-    auto apSsid{m_config.accessPointSsidPrefix};
-    apSsid += platform::getChipIdHex().c_str();
-
-    LOG_INFO(m_name, "Starting AP: %s", apSsid.c_str());
-
-    // Configure and start AP
-    WiFi.mode(WIFI_AP);
-    WiFi.softAPConfig(IPAddress(192, 168, 4, 1),
-                      IPAddress(192, 168, 4, 1),
-                      IPAddress(255, 255, 255, 0));
-
-    if (!m_config.accessPointPassword.empty())
-    {
-        WiFi.softAP(apSsid.c_str(), m_config.accessPointPassword.c_str());
-    }
-    else
-    {
-        WiFi.softAP(apSsid.c_str());
-    }
-
-    // Start DNS server for captive portal
-    m_dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-    m_dnsServer.start(53, "*", IPAddress(192, 168, 4, 1));
-
-    // Setup web server endpoints
-    setupWebServer();
-
-    m_wifiState = WiFiState::ApMode;
-    m_apActive = true;
-
-    LOG_INFO(m_name, "AP started, IP: %s", WiFi.softAPIP().toString().c_str());
-    m_bus.publish(EventType::WifiApStarted);
-}
-
-void WiFiService::stopApMode()
-{
-    if (!m_apActive)
-    {
-        return;
-    }
-
-    LOG_INFO(m_name, "Stopping AP mode");
-
-    m_dnsServer.stop();
-    WiFi.softAPdisconnect(true);
-    m_apActive = false;
-
-    m_bus.publish(EventType::WifiApStopped);
-}
-
-void WiFiService::connectToStation()
-{
-    if (!m_config.isConfigured())
-    {
-        return;
-    }
-
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(m_config.stationSsid.c_str(), m_config.stationPassword.c_str());
-
-    m_wifiState = WiFiState::Connecting;
-    m_connectStartMs = millis();
-    m_connectAttempts = 0;
-
-    LOG_INFO(m_name, "Connecting to %s...", m_config.stationSsid.c_str());
-}
-
-void WiFiService::handleConnecting()
-{
-    if (WiFi.status() == WL_CONNECTED)
-    {
-        onConnected();
-        return;
-    }
-
-    // Check timeout
-    if (millis() - m_connectStartMs >= m_config.stationConnectionTimeoutMs)
-    {
-        ++m_connectAttempts;
-        LOG_WARN(m_name, "Connect timeout, attempt %d/%d", m_connectAttempts, m_config.stationMaxConnectionAttempts);
-
-        if (m_connectAttempts >= m_config.stationMaxConnectionAttempts)
-        {
-            LOG_ERROR(m_name, "Max retries reached, starting AP mode");
-            m_wifiState = WiFiState::Disconnected;
-            startApMode();
-        }
-        else
-        {
-            // Non-blocking retry using state machine
-            WiFi.disconnect();
-            m_wifiState = WiFiState::WaitingRetry;
-            m_lastDisconnectMs = millis();
-            LOG_DEBUG(m_name, "Waiting 100ms before retry...");
-        }
-    }
-}
-
-void WiFiService::handleConnected()
-{
-    // Monitor connection status - transition to disconnected if connection lost
-    if (WiFi.status() != WL_CONNECTED)
-    {
-        onDisconnected();
-        return;
-    }
-
-    // Ensure we're in Running state when connected
-    if (m_state != ServiceState::Running)
-    {
-        setState(ServiceState::Running);
-    }
-}
-
-void WiFiService::handleDisconnected()
-{
-    // Auto-reconnect
-    if (m_config.isConfigured() && millis() - m_lastReconnectAttemptMs >= WiFiConfig::Constants::kStationReconnectIntervalMs)
-    {
-        m_lastReconnectAttemptMs = millis();
-        connectToStation();
-    }
-}
-
-void WiFiService::onConnected()
-{
-    m_wifiState = WiFiState::Connected;
-    m_metrics.connected = true;
-    m_metrics.rssi = WiFi.RSSI();
-
-    if (!m_timeSyncStarted)
-    {
-        configTime(0, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
-        m_timeSyncStarted = true;
-        LOG_INFO(m_name, "NTP sync requested");
-    }
-
-    // Service is now fully operational - transition to Running
-    setState(ServiceState::Running);
-    LOG_INFO(m_name, "WiFi connected - service now Running, IP: %s, RSSI: %d", WiFi.localIP().toString().c_str(), m_metrics.rssi);
-
-    // Stop AP mode if it was running
-    if (m_apActive)
-    {
-        stopApMode();
-    }
-
-    m_bus.publish(EventType::WifiConnected);
-}
-
-void WiFiService::onDisconnected()
-{
-    m_wifiState = WiFiState::Disconnected;
-    m_metrics.connected = false;
-    ++m_metrics.disconnectCount;
-
-    setState(ServiceState::Ready);
-    LOG_WARN(m_name, "WiFi disconnected - service now Ready (will reconnect)");
-
-    m_bus.publish(EventType::WifiDisconnected);
-}
-
-void WiFiService::setupWebServer()
-{
-    // Serve captive portal root
-    m_webServer.on("/", HTTP_GET, [this](AsyncWebServerRequest *request) {
-        request->send(200, "text/html", getConfigPageHtml());
-    });
-
-    // Captive portal detection endpoints
-    m_webServer.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->redirect("/");
-    });
-    m_webServer.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->redirect("/");
-    });
-    m_webServer.on("/fwlink", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->redirect("/");
-    });
-
-    // WiFi scan endpoint
-    m_webServer.on("/scan", HTTP_GET, [this](AsyncWebServerRequest *request) {
-        handleScanNetworks(request);
-    });
-
-    // Save configuration endpoint
-    m_webServer.on("/save", HTTP_POST, [this](AsyncWebServerRequest *request) {
-        handleSaveConfig(request);
-    });
-
-    // Status endpoint
-    m_webServer.on("/status", HTTP_GET, [this](AsyncWebServerRequest *request) {
-        handleStatus(request);
-    });
-
-    m_webServer.begin();
-}
-
-void WiFiService::handleScanNetworks(AsyncWebServerRequest *request)
-{
-    const auto result{WiFi.scanComplete()};
-
-    if (result == WIFI_SCAN_FAILED)
-    {
-        WiFi.scanNetworks(true); // Async scan
-        request->send(202, "application/json", "{\"status\":\"scanning\"}");
-        return;
-    }
-
-    if (result == WIFI_SCAN_RUNNING)
-    {
-        request->send(202, "application/json", "{\"status\":\"scanning\"}");
-        return;
-    }
-
-    JsonDocument doc;
-    const auto networks{doc["networks"].to<JsonArray>()};
-
-    for (auto i = 0; i < result; i++)
-    {
-        auto net{networks.add<JsonObject>()};
-        net["ssid"] = WiFi.SSID(i);
-        net["rssi"] = WiFi.RSSI(i);
-        net["secure"] = platform::isNetworkSecure(i);
-    }
-
-    WiFi.scanDelete();
-    WiFi.scanNetworks(true); // Start new scan for next request
-
-    String json;
-    serializeJson(doc, json);
-    request->send(200, "application/json", json);
-}
-
-void WiFiService::handleSaveConfig(AsyncWebServerRequest *request)
-{
-    String ssid = request->hasParam("ssid", true) ? request->getParam("ssid", true)->value() : "";
-    String password = request->hasParam("password", true) ? request->getParam("password", true)->value() : "";
-
-    if (ssid.isEmpty())
-    {
-        request->send(400, "application/json", "{\"error\":\"SSID required\"}");
-        return;
-    }
-
-    // TODO: i dont like use raw config change it must use service so fuck this shit
-    m_systemConfig.wifi.stationSsid = ssid.c_str();
-    m_systemConfig.wifi.stationPassword = password.c_str();
-
-    // MQTT configuration (optional)
-    if (request->hasParam("mqtt_broker", true))
-    {
-        if (const auto broker{request->getParam("mqtt_broker", true)->value()}; !broker.isEmpty())
-        {
-            m_systemConfig.mqtt.brokerAddress = broker.c_str();
-            LOG_INFO(m_name, "MQTT broker updated: %s", broker.c_str());
-        }
-    }
-    if (request->hasParam("mqtt_port", true))
-    {
-        m_systemConfig.mqtt.port = request->getParam("mqtt_port", true)->value().toInt();
-    }
-    if (request->hasParam("mqtt_username", true))
-    {
-        m_systemConfig.mqtt.username = request->getParam("mqtt_username", true)->value().c_str();
-    }
-    if (request->hasParam("mqtt_password", true))
-    {
-        m_systemConfig.mqtt.password = request->getParam("mqtt_password", true)->value().c_str();
-    }
-    if (request->hasParam("mqtt_base_topic", true))
-    {
-        if (const auto topic = request->getParam("mqtt_base_topic", true)->value(); !topic.isEmpty())
-        {
-            m_systemConfig.mqtt.baseTopic = topic.c_str();
-        }
-    }
-
-    // save(); from service is new i add it after all this shit so in future use it TODO: fix
-    // Notify other services that configuration has changed
-    m_bus.publish(EventType::ConfigChanged);
-
-    request->send(200, "application/json", "{\"status\":\"saved\",\"message\":\"Rebooting in 2 seconds...\"}");
-
-    LOG_INFO(m_name, "Config saved (WiFi: %s, MQTT: %s), scheduling reboot in %ums", m_systemConfig.wifi.stationSsid.c_str(), m_systemConfig.mqtt.brokerAddress.empty() ? "not configured" : m_systemConfig.mqtt.brokerAddress.c_str(), WiFiConfig::Constants::kSystemRebootDelayMs);
-
-    // Non-blocking reboot using state machine
-    m_rebootPending = true;
-    m_rebootRequestedMs = millis();
-}
-
-void WiFiService::handleStatus(AsyncWebServerRequest *request)
-{
-    JsonDocument doc;
-
-    doc["wifi_connected"] = (WiFi.status() == WL_CONNECTED);
-    doc["ap_active"] = m_apActive;
-
-    if (WiFi.status() == WL_CONNECTED)
-    {
-        doc["ssid"] = WiFi.SSID();
-        doc["ip"] = WiFi.localIP().toString();
-        doc["rssi"] = WiFi.RSSI();
-    }
-
-    if (m_apActive)
-    {
-        doc["ap_ip"] = WiFi.softAPIP().toString();
-        doc["ap_clients"] = WiFi.softAPgetStationNum();
-    }
-
-    String json;
-    serializeJson(doc, json);
-    request->send(200, "application/json", json);
-}
-
-String WiFiService::getConfigPageHtml() const
-{
-    return R"(
+// Store HTML in flash memory to save RAM
+constexpr char CONFIG_HTML[] PROGMEM = R"(
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -673,6 +242,465 @@ String WiFiService::getConfigPageHtml() const
 </body>
 </html>
 )";
+} // namespace
+
+WiFiService::WiFiService(EventBus &bus, ConfigService &config)
+    : ServiceBase("WiFiService")
+    , m_bus(bus)
+    , m_config(config.getWifiConfig())
+    , m_systemConfig(config.getMutable())
+    , m_hasEverConnected(m_config.stationHasEverConnected) // Load from config
+{
+    m_eventConnections.reserve(2);
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::PowerStateChange, [this](const Event &e) {
+        handlePowerStateChange(e);
+    }));
+}
+
+Status WiFiService::begin()
+{
+    setState(ServiceState::Initializing);
+    LOG_INFO(m_name, "Initializing WiFiService...");
+
+    WiFi.persistent(false); // non use static :persistent not works in esp32
+    WiFi.mode(WIFI_OFF);
+    delay(100); // TODO: need fix this is brief delay for WiFi hardware reset - unavoidable during initialization
+
+    if (!m_config.isConfigured())
+    {
+        LOG_INFO(m_name, "WiFi not configured, starting AP mode");
+        startApMode();
+        // AP mode is operational - transition to Running
+        setState(ServiceState::Running);
+        return Status::Ok();
+    }
+
+    LOG_INFO(m_name, "Connecting to %s...", m_config.stationSsid.c_str());
+    connectToStation();
+
+    setState(ServiceState::Ready);
+    LOG_INFO(m_name, "Ready (waiting for WiFi connection)");
+    return Status::Ok();
+}
+
+void WiFiService::loop()
+{
+    if (m_state != ServiceState::Ready && m_state != ServiceState::Running)
+    {
+        return;
+    }
+
+    switch (m_wifiState)
+    {
+        case WiFiState::Connecting: {
+            handleConnecting();
+            break;
+        }
+        case WiFiState::Connected: {
+            handleConnected();
+            break;
+        }
+        case WiFiState::ApMode: {
+            // AP mode handling - DNS server is non-blocking
+            m_dnsServer.processNextRequest();
+            break;
+        }
+        case WiFiState::Disconnected: {
+            handleDisconnected();
+            break;
+        }
+        case WiFiState::WaitingRetry: {
+            // Non-blocking retry delay
+            if (millis() - m_lastDisconnectMs >= 100)
+            {
+                connectToStation();
+            }
+            break;
+        }
+        default: {
+            break;
+        }
+    }
+}
+
+void WiFiService::end()
+{
+    setState(ServiceState::Stopping);
+    LOG_INFO(m_name, "Shutting down...");
+
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        WiFi.disconnect();
+    }
+    if (m_apActive)
+    {
+        stopApMode();
+    }
+
+    WiFi.mode(WIFI_OFF);
+    m_wifiState = WiFiState::Disconnected;
+
+    setState(ServiceState::Stopped);
+    LOG_INFO(m_name, "Stopped");
+}
+
+void WiFiService::startApMode()
+{
+    auto apSsid{m_config.accessPointSsidPrefix};
+    apSsid += platform::getChipIdHex().c_str();
+
+    LOG_INFO(m_name, "Starting AP: %s", apSsid.c_str());
+
+    // Configure and start AP
+    WiFi.mode(WIFI_AP);
+    WiFi.softAPConfig(IPAddress(192, 168, 4, 1),
+                      IPAddress(192, 168, 4, 1),
+                      IPAddress(255, 255, 255, 0));
+
+    if (!m_config.accessPointPassword.empty())
+    {
+        WiFi.softAP(apSsid.c_str(), m_config.accessPointPassword.c_str());
+    }
+    else
+    {
+        WiFi.softAP(apSsid.c_str());
+    }
+
+    // Start DNS server for captive portal
+    m_dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+    m_dnsServer.start(53, "*", IPAddress(192, 168, 4, 1));
+
+    // Setup web server endpoints
+    setupWebServer();
+
+    m_wifiState = WiFiState::ApMode;
+    m_apActive = true;
+
+    LOG_INFO(m_name, "AP started, IP: %s", WiFi.softAPIP().toString().c_str());
+    m_bus.publish(EventType::WifiApStarted);
+}
+
+void WiFiService::stopApMode()
+{
+    if (!m_apActive)
+    {
+        return;
+    }
+
+    LOG_INFO(m_name, "Stopping AP mode");
+
+    m_dnsServer.stop();
+    WiFi.softAPdisconnect(true);
+    m_apActive = false;
+
+    m_bus.publish(EventType::WifiApStopped);
+}
+
+void WiFiService::connectToStation()
+{
+    if (!m_config.isConfigured())
+    {
+        return;
+    }
+
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(m_config.stationSsid.c_str(), m_config.stationPassword.c_str());
+
+    m_wifiState = WiFiState::Connecting;
+    m_connectStartMs = millis();
+    ++m_connectAttempts;
+
+    if (m_inSlowRetryMode)
+    {
+        LOG_INFO(m_name, "Slow retry attempt #%d to %s...", m_connectAttempts, m_config.stationSsid.c_str());
+    }
+    else
+    {
+        LOG_INFO(m_name, "Connecting to %s (attempt %d/%d)...", m_config.stationSsid.c_str(), m_connectAttempts, m_config.stationMaxFastConnectionAttempts);
+    }
+}
+
+void WiFiService::handleConnecting()
+{
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        onConnected();
+        return;
+    }
+
+    // Check timeout
+    if (millis() - m_connectStartMs >= m_config.stationConnectionTimeoutMs)
+    {
+        if (!m_inSlowRetryMode && m_connectAttempts >= m_config.stationMaxFastConnectionAttempts)
+        {
+            if (!m_hasEverConnected) // If never connected before, start AP mode
+            {
+                LOG_ERROR(m_name, "Max fast retries (%d) reached and never connected, starting AP mode", m_config.stationMaxFastConnectionAttempts);
+                WiFi.disconnect();
+                m_wifiState = WiFiState::Disconnected;
+                startApMode();
+                return;
+            }
+
+            m_inSlowRetryMode = true; // If was connected before, switch to slow retry mode (WiFi temporarily down)
+            LOG_WARN(m_name, "Max fast retries (%d) reached, switching to slow retry mode (every 10 min) - WiFi may be temporarily down", m_config.stationMaxFastConnectionAttempts);
+        }
+
+        WiFi.disconnect();
+        m_wifiState = WiFiState::Disconnected;
+        m_lastReconnectAttemptMs = millis();
+
+        if (m_inSlowRetryMode)
+        {
+            LOG_DEBUG(m_name, "Will retry in 10 minutes...");
+        }
+        else
+        {
+            LOG_WARN(m_name, "Connect timeout (attempt %d/%d), will retry in 5 seconds", m_connectAttempts, m_config.stationMaxFastConnectionAttempts);
+        }
+    }
+}
+
+void WiFiService::handleConnected()
+{
+    // Monitor connection status - transition to disconnected if connection lost
+    if (WiFi.status() != WL_CONNECTED)
+    {
+        onDisconnected();
+        return;
+    }
+
+    // Ensure we're in Running state when connected
+    if (m_state != ServiceState::Running)
+    {
+        setState(ServiceState::Running);
+    }
+}
+
+void WiFiService::handleDisconnected()
+{
+    if (!m_config.isConfigured())
+    {
+        return;
+    }
+
+    const auto currentMs{millis()};
+    const auto timeSinceLastAttempt{currentMs - m_lastReconnectAttemptMs};
+    const auto retryInterval{m_inSlowRetryMode ? m_config.stationSlowReconnectIntervalMs : m_config.stationFastReconnectIntervalMs};
+
+    if (timeSinceLastAttempt >= retryInterval)
+    {
+        m_lastReconnectAttemptMs = currentMs;
+        connectToStation();
+    }
+}
+
+void WiFiService::onConnected()
+{
+    m_wifiState = WiFiState::Connected;
+    m_metrics.connected = true;
+    m_metrics.rssi = WiFi.RSSI();
+
+    const auto wasFirstConnection{!m_hasEverConnected};
+    m_hasEverConnected = true;
+
+    if (wasFirstConnection)
+    {
+        m_systemConfig.wifi.stationHasEverConnected = true;
+        m_bus.publish(EventType::ConfigChanged);
+        LOG_INFO(m_name, "First successful WiFi connection - flag persisted to config");
+    }
+
+    m_connectAttempts = 0;
+    m_inSlowRetryMode = false;
+
+    if (!m_timeSyncStarted)
+    {
+        configTime(0, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
+        m_timeSyncStarted = true;
+        LOG_INFO(m_name, "NTP sync requested");
+    }
+
+    // Service is now fully operational - transition to Running
+    setState(ServiceState::Running);
+    LOG_INFO(m_name, "WiFi connected - service now Running, IP: %s, RSSI: %d", WiFi.localIP().toString().c_str(), m_metrics.rssi);
+
+    // Stop AP mode if it was running
+    if (m_apActive)
+    {
+        stopApMode();
+    }
+
+    m_bus.publish(EventType::WifiConnected);
+}
+
+void WiFiService::onDisconnected()
+{
+    m_wifiState = WiFiState::Disconnected;
+    m_metrics.connected = false;
+    ++m_metrics.disconnectCount;
+
+    setState(ServiceState::Ready);
+    LOG_WARN(m_name, "WiFi disconnected - service now Ready (will reconnect)");
+
+    m_bus.publish(EventType::WifiDisconnected);
+}
+
+void WiFiService::setupWebServer()
+{
+    // Configuration page
+    m_webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send_P(200, "text/html", CONFIG_HTML);
+    });
+
+    // Captive portal detection endpoints
+    m_webServer.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->redirect("/");
+    });
+    m_webServer.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->redirect("/");
+    });
+    m_webServer.on("/fwlink", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->redirect("/");
+    });
+
+    // WiFi scan endpoint
+    m_webServer.on("/scan", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        handleScanNetworks(request);
+    });
+
+    // Save configuration endpoint
+    m_webServer.on("/save", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        handleSaveConfig(request);
+    });
+
+    // Status endpoint
+    m_webServer.on("/status", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        handleStatus(request);
+    });
+
+    m_webServer.begin();
+}
+
+void WiFiService::handleScanNetworks(AsyncWebServerRequest *request)
+{
+    const auto result{WiFi.scanComplete()};
+
+    if (result == WIFI_SCAN_FAILED)
+    {
+        WiFi.scanNetworks(true); // Async scan
+        request->send(202, "application/json", R"({"status":"scanning"})");
+        return;
+    }
+
+    if (result == WIFI_SCAN_RUNNING)
+    {
+        request->send(202, "application/json", R"({"status":"scanning"})");
+        return;
+    }
+
+    JsonDocument doc;
+    const auto networks{doc["networks"].to<JsonArray>()};
+
+    for (auto i = 0; i < result; i++)
+    {
+        auto net{networks.add<JsonObject>()};
+        net["ssid"] = WiFi.SSID(i);
+        net["rssi"] = WiFi.RSSI(i);
+        net["secure"] = platform::isNetworkSecure(i);
+    }
+
+    WiFi.scanDelete();
+    WiFi.scanNetworks(true); // Start new scan for next request
+
+    String json;
+    serializeJson(doc, json);
+    request->send(200, "application/json", json);
+}
+
+void WiFiService::handleSaveConfig(AsyncWebServerRequest *request)
+{
+    const auto ssid{request->hasParam("ssid", true) ? request->getParam("ssid", true)->value() : ""};
+    const auto password{request->hasParam("password", true) ? request->getParam("password", true)->value() : ""};
+
+    if (ssid.isEmpty())
+    {
+        request->send(400, "application/json", R"({"error":"SSID required"})");
+        return;
+    }
+
+    // TODO: i dont like use raw config change it must use service so fuck this shit
+    m_systemConfig.wifi.stationSsid = ssid.c_str();
+    m_systemConfig.wifi.stationPassword = password.c_str();
+
+    // MQTT configuration (optional)
+    if (request->hasParam("mqtt_broker", true))
+    {
+        if (const auto broker{request->getParam("mqtt_broker", true)->value()}; !broker.isEmpty())
+        {
+            m_systemConfig.mqtt.brokerAddress = broker.c_str();
+            LOG_INFO(m_name, "MQTT broker updated: %s", broker.c_str());
+        }
+    }
+    if (request->hasParam("mqtt_port", true))
+    {
+        m_systemConfig.mqtt.port = request->getParam("mqtt_port", true)->value().toInt();
+    }
+    if (request->hasParam("mqtt_username", true))
+    {
+        m_systemConfig.mqtt.username = request->getParam("mqtt_username", true)->value().c_str();
+    }
+    if (request->hasParam("mqtt_password", true))
+    {
+        m_systemConfig.mqtt.password = request->getParam("mqtt_password", true)->value().c_str();
+    }
+    if (request->hasParam("mqtt_base_topic", true))
+    {
+        if (const auto topic = request->getParam("mqtt_base_topic", true)->value(); !topic.isEmpty())
+        {
+            m_systemConfig.mqtt.baseTopic = topic.c_str();
+        }
+    }
+
+    // save(); from service is new i add it after all this shit so in future use it TODO: fix
+    // Notify other services that configuration has changed
+    m_bus.publish(EventType::ConfigChanged);
+
+    request->send(200, "application/json", R"({"status":"saved","message":"Rebooting in 5 seconds..."})");
+
+    LOG_INFO(m_name, "Config saved (WiFi: %s, MQTT: %s), scheduling reboot in %ums to reinitialize all modules",
+             m_systemConfig.wifi.stationSsid.c_str(),
+             m_systemConfig.mqtt.brokerAddress.empty() ? "not configured" : m_systemConfig.mqtt.brokerAddress.c_str(),
+             WiFiConfig::Constants::kSystemRebootDelayMs);
+
+    // Schedule reboot to ensure all modules (WiFi, MQTT, etc) reinitialize with new config
+    m_rebootPending = true;
+    m_rebootRequestedMs = millis();
+}
+
+void WiFiService::handleStatus(AsyncWebServerRequest *request)
+{
+    JsonDocument doc;
+
+    doc["wifi_connected"] = (WiFi.status() == WL_CONNECTED);
+    doc["ap_active"] = m_apActive;
+
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        doc["ssid"] = WiFi.SSID();
+        doc["ip"] = WiFi.localIP().toString();
+        doc["rssi"] = WiFi.RSSI();
+    }
+
+    if (m_apActive)
+    {
+        doc["ap_ip"] = WiFi.softAPIP().toString();
+        doc["ap_clients"] = WiFi.softAPgetStationNum();
+    }
+
+    String json;
+    serializeJson(doc, json);
+    request->send(200, "application/json", json);
 }
 
 void WiFiService::handlePowerStateChange(const Event &event)

@@ -191,13 +191,21 @@ bool MqttService::unsubscribe(const char *topicSuffix)
 std::string MqttService::buildTopic(const char *suffix) const
 {
     // Use cached prefix for better performance
-    std::string topic = m_topicPrefix;
+    std::string topic;
+    // Pre-reserve space to avoid reallocation: prefix + suffix + null terminator
+    topic.reserve(m_topicPrefix.length() + std::strlen(suffix) + 1);
+    topic = m_topicPrefix;
     topic += suffix;
     return topic;
 }
 
 void MqttService::rebuildTopicPrefix()
 {
+    // Pre-reserve space for typical topic prefix to avoid reallocations
+    // Format: "baseTopic/deviceId/" (e.g., "home/attendance/device123/" = ~30 chars)
+    const auto estimatedSize{m_config.baseTopic.length() + m_deviceConfig.deviceId.length() + 2};
+    m_topicPrefix.reserve(estimatedSize);
+
     m_topicPrefix = m_config.baseTopic;
     if (!m_topicPrefix.empty() && m_topicPrefix.back() != '/')
     {

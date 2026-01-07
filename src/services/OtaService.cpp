@@ -5,11 +5,15 @@
 
 namespace isic {
 
-OtaService::OtaService(EventBus& bus, const OtaConfig& config)
+OtaService::OtaService(EventBus& bus, const OtaConfig& config, AsyncWebServer& webServer)
     : ServiceBase("OtaService")
     , m_bus(bus)
     , m_config(config)
+    , m_webServer(webServer)
 {
+    // Pre-reserve space for future event subscriptions (MQTT OTA integration)
+    m_eventConnections.reserve(2);
+
     // TODO: i chnage ota to new elegant ota async version, so mqtt ota part need re-implemnt if needed
 
     // // Request subscription to OTA topic when MQTT connects

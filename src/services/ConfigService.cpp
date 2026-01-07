@@ -61,8 +61,11 @@ void serializeWifiConfig(const JsonObject &wifi, const WiFiConfig &wifiConfig)
     wifi["stationPassword"] = wifiConfig.stationPassword;
     wifi["stationConnectRetryDelayMs"] = wifiConfig.stationConnectRetryDelayMs;
     wifi["stationConnectionTimeoutMs"] = wifiConfig.stationConnectionTimeoutMs;
-    wifi["stationMaxConnectionAttempts"] = wifiConfig.stationMaxConnectionAttempts;
+    wifi["stationFastReconnectIntervalMs"] = wifiConfig.stationFastReconnectIntervalMs;
+    wifi["stationSlowReconnectIntervalMs"] = wifiConfig.stationSlowReconnectIntervalMs;
+    wifi["stationMaxFastConnectionAttempts"] = wifiConfig.stationMaxFastConnectionAttempts;
     wifi["stationPowerSaveEnabled"] = wifiConfig.stationPowerSaveEnabled;
+    wifi["stationHasEverConnected"] = wifiConfig.stationHasEverConnected;
     wifi["accessPointSsidPrefix"] = wifiConfig.accessPointSsidPrefix;
     wifi["accessPointPassword"] = wifiConfig.accessPointPassword;
     wifi["accessPointModeTimeoutMs"] = wifiConfig.accessPointModeTimeoutMs;
@@ -250,8 +253,11 @@ bool deserializeWifiConfig(const JsonVariant &json, WiFiConfig &wifiConfig)
     PARSE_STR(json, "stationPassword", wifiConfig.stationPassword);
     PARSE_NUM(json, "stationConnectRetryDelayMs", wifiConfig.stationConnectRetryDelayMs);
     PARSE_NUM(json, "stationConnectionTimeoutMs", wifiConfig.stationConnectionTimeoutMs);
-    PARSE_NUM(json, "stationMaxConnectionAttempts", wifiConfig.stationMaxConnectionAttempts);
+    PARSE_NUM(json, "StationFastReconnectIntervalMs", wifiConfig.stationFastReconnectIntervalMs);
+    PARSE_NUM(json, "stationSlowReconnectIntervalMs", wifiConfig.stationSlowReconnectIntervalMs);
+    PARSE_NUM(json, "stationMaxFastConnectionAttempts", wifiConfig.stationMaxFastConnectionAttempts);
     PARSE_BOOL(json, "stationPowerSaveEnabled", wifiConfig.stationPowerSaveEnabled);
+    PARSE_BOOL(json, "stationHasEverConnected", wifiConfig.stationHasEverConnected);
     PARSE_STR(json, "accessPointSsidPrefix", wifiConfig.accessPointSsidPrefix);
     PARSE_STR(json, "accessPointPassword", wifiConfig.accessPointPassword);
     PARSE_NUM(json, "accessPointModeTimeoutMs", wifiConfig.accessPointModeTimeoutMs);

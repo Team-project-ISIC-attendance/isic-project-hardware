@@ -140,6 +140,15 @@ public:
             return 0;
 
         LockGuard<Mutex> lock(m_mutex);
+
+        // Pre-allocate capacity on first subscription to avoid reallocations
+        // Most signals have 1-3 subscribers, so reserving 4 slots prevents
+        // the 0→1→2→4 reallocation cascade that fragments ESP8266 heap
+        if (m_slots.empty())
+        {
+            m_slots.reserve(4);
+        }
+
         Connection id = ++m_nextId;
         m_slots.push_back({id, std::move(callback)});
         return id;
@@ -352,8 +361,9 @@ private:
     }
 
     /// Ring buffer size - balance between memory and event burst capacity
-    /// ESP8266: 16 events * sizeof(Event) = ~512 bytes for typical Event size
-    static constexpr std::size_t MAX_PENDING_EVENTS{16};
+    /// ESP8266: Reduced to 4 to save memory (27 KB across 36 signals)
+    /// With 100 Hz dispatch rate, 4 slots provide adequate buffering
+    static constexpr std::size_t MAX_PENDING_EVENTS{4};
 
     mutable Mutex m_mutex;
     std::vector<Slot> m_slots;

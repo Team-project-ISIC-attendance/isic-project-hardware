@@ -14,7 +14,7 @@ namespace isic
 class OtaService : public ServiceBase
 {
 public:
-    OtaService(EventBus &bus, const OtaConfig &config);
+    OtaService(EventBus &bus, const OtaConfig &config, AsyncWebServer &webServer);
     ~OtaService() override = default;
 
     OtaService(const OtaService &) = delete;
@@ -47,7 +47,7 @@ private:
 
     EventBus &m_bus;
     const OtaConfig &m_config;
-    AsyncWebServer m_webServer{80};
+    AsyncWebServer &m_webServer;  // Reference to shared web server
 
     OtaState m_otaState{OtaState::Idle};
     std::uint8_t m_progress{0};
