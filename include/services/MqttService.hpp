@@ -27,6 +27,10 @@ public:
     void loop() override;
     void end() override;
 
+    [[nodiscard]] const MqttMetrics &getMqttMetrics() const noexcept
+    {
+        return m_metrics;
+    }
     [[nodiscard]] MqttState getMqttState() const noexcept
     {
         return m_mqttState;
@@ -39,9 +43,14 @@ public:
     {
         return m_topicPrefix;
     }
-    [[nodiscard]] const MqttMetrics &getMetrics() const noexcept
+
+    void serializeMetrics(JsonObject &obj) const override
     {
-        return m_metrics;
+        obj["state"] = toString(getState());
+        obj["published"] = m_metrics.messagesPublished;
+        obj["failed"] = m_metrics.messagesFailed;
+        obj["received"] = m_metrics.messagesReceived;
+        obj["reconnects"] = m_metrics.reconnectCount;
     }
 
     bool publish(const char *topicSuffix, const char *payload, bool retained = false);

@@ -1,18 +1,24 @@
 #ifndef ISIC_SERVICES_CONFIGSERVICE_HPP
 #define ISIC_SERVICES_CONFIGSERVICE_HPP
 
+/**
+ * @file ConfigService.hpp
+ * @brief Configuration storage and access service
+ *
+ * Loads, persists, and publishes configuration updates across services.
+ */
+
 #include "common/Config.hpp"
 #include "core/EventBus.hpp"
 #include "core/IService.hpp"
 
-#include <ArduinoJson.h>
 #include <vector>
 
 namespace isic
 {
 class ConfigService : public ServiceBase
 {
-    static constexpr auto *CONFIG_FILE{"/config.json"};
+    static constexpr auto *kConfigFile{"/config.json"};
 
 public:
     explicit ConfigService(EventBus &bus);
@@ -78,6 +84,14 @@ public:
     [[nodiscard]] Status load();
     [[nodiscard]] Status reset();
 
+    template<typename UpdateFunc>
+    void update(UpdateFunc&& func)
+    {
+        func(m_config);
+        (void)save(); // must be always successful
+        m_bus.publish(EventType::ConfigChanged);
+    }
+
     [[nodiscard]] bool isConfigured() const noexcept
     {
         return m_config.isConfigured();
@@ -87,12 +101,9 @@ public:
         return m_dirty;
     }
 
-    template<typename UpdateFunc>
-    void update(UpdateFunc&& func)
+    void serializeMetrics(JsonObject &obj) const override
     {
-        func(m_config);
-        (void)save(); // must be always successful
-        m_bus.publish(EventType::ConfigChanged);
+        obj["state"] = toString(getState());
     }
 
 private:
@@ -102,8 +113,10 @@ private:
     EventBus &m_bus;
     Config m_config{};
 
+    // Event connections
     std::vector<EventBus::ScopedConnection> m_eventConnections{};
 
+    // Dirty flag to indicate unsaved changes
     bool m_dirty{false};
 };
 } // namespace isic

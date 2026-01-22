@@ -11,16 +11,16 @@ struct WiFiConfig
     {
         static constexpr auto kSystemRebootDelayMs{5'000};
     };
-    static constexpr auto kStationConnectRetryDelayMs{500};
-    static constexpr auto kStationConnectionTimeoutMs{10'000};
+    static constexpr auto kStationConnectRetryDelayMs{500}; // 500 milliseconds
+    static constexpr auto kStationConnectionTimeoutMs{10'000}; // 10 seconds
     static constexpr auto kStationMaxFastConnectionAttempts{10};
-    static constexpr auto kStationFastReconnectIntervalMs{5'000};
-    static constexpr auto kStationSlowReconnectIntervalMs{600'000};
+    static constexpr auto kStationFastReconnectIntervalMs{5'000}; // 5 seconds
+    static constexpr auto kStationSlowReconnectIntervalMs{600'000}; // 10 minutes
     static constexpr auto kStationHasEverConnected{false};
     static constexpr auto kStationPowerSaveEnabled{false};
     static constexpr auto kAccessPointSsidPrefix{"ISIC-Setup-"};
     static constexpr auto kAccessPointDefaultPassword{"isic1234"};
-    static constexpr auto kAccessPointModeTimeoutMs{300'000};
+    static constexpr auto kAccessPointModeTimeoutMs{300'000}; // 5 minutes
 
     std::string stationSsid{};
     std::string stationPassword{};
@@ -65,9 +65,9 @@ struct MqttConfig
     };
     static constexpr auto kDefaultBrokerPort{1883};
     static constexpr auto kDefaultBaseTopic{"device"};
-    static constexpr auto kDefaultKeepAliveIntervalSec{60};
-    static constexpr auto kDefaultReconnectMinIntervalMs{1'000};
-    static constexpr auto kDefaultReconnectMaxIntervalMs{30'000};
+    static constexpr auto kDefaultKeepAliveIntervalSec{60}; // 60 seconds
+    static constexpr auto kDefaultReconnectMinIntervalMs{1'000}; // 1 second
+    static constexpr auto kDefaultReconnectMaxIntervalMs{30'000}; // 30 seconds
 
     std::string brokerAddress{};
     std::string username{};
@@ -122,26 +122,35 @@ struct DeviceConfig
 
 struct Pn532Config
 {
+#ifdef ISIC_PLATFORM_ESP8266
     static constexpr auto kDefaultSpiSckPin{14};
     static constexpr auto kDefaultSpiMisoPin{12};
     static constexpr auto kDefaultSpiMosiPin{13};
     static constexpr auto kDefaultSpiCsPin{5};
     static constexpr auto kDefaultIrqPin{4};
-    static constexpr auto kDefaultResetPin{0xFF};
-    static constexpr auto kDefaultPollIntervalMs{100};
-    static constexpr auto kDefaultReadTimeoutMs{200};
-    static constexpr auto kDefaultRecoveryDelayMs{2'000};
+#elif defined(ISIC_PLATFORM_ESP32)
+    static constexpr auto kDefaultSpiSckPin{14};
+    static constexpr auto kDefaultSpiMisoPin{12};
+    static constexpr auto kDefaultSpiMosiPin{13};
+    static constexpr auto kDefaultSpiCsPin{5};
+    static constexpr auto kDefaultIrqPin{27};
+#else
+#error "Unsupported platform"
+#endif
+    static constexpr auto kDefaultReadTimeoutMs{200}; // 200 milliseconds
+    static constexpr auto kDefaultRecoveryDelayMs{2'000}; // 2 seconds
     static constexpr auto kDefaultMaxConsecutiveErrors{5};
+    static constexpr auto kDefaultPollIntervalMs{0}; // Fallback polling interval when IRQ disabled
 
-    std::uint32_t pollIntervalMs{kDefaultPollIntervalMs};
     std::uint32_t readTimeoutMs{kDefaultReadTimeoutMs};
     std::uint32_t recoveryDelayMs{kDefaultRecoveryDelayMs};
+    std::uint32_t pollIntervalMs{kDefaultPollIntervalMs}; // 0 = use IRQ (default behavior when irqPin valid)
     std::uint8_t spiSckPin{kDefaultSpiSckPin};
     std::uint8_t spiMisoPin{kDefaultSpiMisoPin};
     std::uint8_t spiMosiPin{kDefaultSpiMosiPin};
     std::uint8_t spiCsPin{kDefaultSpiCsPin};
     std::uint8_t irqPin{kDefaultIrqPin};
-    std::uint8_t resetPin{kDefaultResetPin};
+
     std::uint8_t maxConsecutiveErrors{kDefaultMaxConsecutiveErrors};
 
     [[nodiscard]] constexpr bool isConfigured() const // NOLINT
@@ -149,17 +158,21 @@ struct Pn532Config
         return true; // PN532 always considered configured
     }
 
+    [[nodiscard]] constexpr bool useIrq() const
+    {
+        return irqPin != 0xFF && (pollIntervalMs == 0);
+    }
+
     constexpr void restoreDefaults()
     {
-        pollIntervalMs = kDefaultPollIntervalMs;
         readTimeoutMs = kDefaultReadTimeoutMs;
         recoveryDelayMs = kDefaultRecoveryDelayMs;
+        pollIntervalMs = kDefaultPollIntervalMs;
         spiSckPin = kDefaultSpiSckPin;
         spiMisoPin = kDefaultSpiMisoPin;
         spiMosiPin = kDefaultSpiMosiPin;
         spiCsPin = kDefaultSpiCsPin;
         irqPin = kDefaultIrqPin;
-        resetPin = kDefaultResetPin;
         maxConsecutiveErrors = kDefaultMaxConsecutiveErrors;
     }
 };
@@ -178,13 +191,13 @@ struct AttendanceConfig
         static constexpr auto kDebounceCacheSize{8};
     };
 
-    static constexpr auto kDefaultDebounceIntervalMs{2'000};
-    static constexpr auto kDefaultBatchMaxSize{10};
-    static constexpr auto kDefaultOfflineBufferSize{20};
-    static constexpr auto kDefaultBatchFlushIntervalMs{30'000};
-    static constexpr auto kDefaultBatchingEnabled{true};
-    static constexpr auto kDefaultOfflineBufferFlushIntervalMs{5'000};
-    static constexpr auto kDefaultOfflineQueuePolicy{OfflineQueuePolicy::DropOldest};
+    static constexpr auto kDefaultDebounceIntervalMs{2'000}; // 2 seconds
+    static constexpr auto kDefaultBatchMaxSize{10}; // 10 records
+    static constexpr auto kDefaultOfflineBufferSize{20}; // 20 records
+    static constexpr auto kDefaultBatchFlushIntervalMs{30'000}; // 30 seconds
+    static constexpr auto kDefaultBatchingEnabled{false}; // Disabled by default
+    static constexpr auto kDefaultOfflineBufferFlushIntervalMs{5'000}; // 5 seconds
+    static constexpr auto kDefaultOfflineQueuePolicy{OfflineQueuePolicy::DropOldest}; // Drop oldest by default
 
     std::uint32_t debounceIntervalMs{kDefaultDebounceIntervalMs};
     std::uint32_t batchFlushIntervalMs{kDefaultBatchFlushIntervalMs};
@@ -222,7 +235,7 @@ struct FeedbackConfig
     static constexpr auto kDefaultLedEnabled{true};
     static constexpr auto kDefaultLedPin{2};
     static constexpr auto kDefaultBuzzerEnabled{true};
-    static constexpr auto kDefaultBuzzerPin{14};
+    static constexpr auto kDefaultBuzzerPin{25};
     static constexpr auto kDefaultLedActiveHigh{false};
     static constexpr auto kDefaultBeepFrequencyHz{2'000};
     static constexpr auto kDefaultSuccessBlinkDurationMs{100};
@@ -264,6 +277,7 @@ struct HealthConfig
         static constexpr auto kMaxComponentsCount{8};
         static constexpr auto kHeapCriticalThresholdBytes{4096};
         static constexpr auto kHeapWarningThresholdBytes{8192};
+        static constexpr auto kRssiCriticalThresholdDbm {-90};
         static constexpr auto kRssiWarningThresholdDbm{-80};
         static constexpr auto kFragmentationWarningThresholdPercent{50};
     };
@@ -271,11 +285,13 @@ struct HealthConfig
     static constexpr auto kDefaultEnabled{true};
     static constexpr auto kDefaultHealthCheckIntervalMs{300'000}; // 5 minutes
     static constexpr auto kDefaultStatusUpdateIntervalMs{60'000}; // 1 minute
+    static constexpr auto kDefaultMetricsPublishIntervalMs{3'600'000}; // 1 hour
     static constexpr auto kDefaultPublishToMqtt{true};
     static constexpr auto kDefaultPublishToLog{true};
 
     std::uint32_t healthCheckIntervalMs{kDefaultHealthCheckIntervalMs};
     std::uint32_t statusUpdateIntervalMs{kDefaultStatusUpdateIntervalMs};
+    std::uint32_t metricsPublishIntervalMs{kDefaultMetricsPublishIntervalMs};
     bool enabled{kDefaultEnabled};
     bool publishToMqtt{kDefaultPublishToMqtt};
     bool publishToLog{kDefaultPublishToLog};
@@ -289,6 +305,7 @@ struct HealthConfig
     {
         healthCheckIntervalMs = kDefaultHealthCheckIntervalMs;
         statusUpdateIntervalMs = kDefaultStatusUpdateIntervalMs;
+        metricsPublishIntervalMs = kDefaultMetricsPublishIntervalMs;
         enabled = kDefaultEnabled;
         publishToMqtt = kDefaultPublishToMqtt;
         publishToLog = kDefaultPublishToLog;

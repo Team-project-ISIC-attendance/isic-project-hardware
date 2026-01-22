@@ -2,6 +2,7 @@
 
 #include "common/Logger.hpp"
 #include "platform/PlatformESP.hpp"
+#include "platform/PlatformWiFi.hpp"
 #include "services/ConfigService.hpp"
 
 #include <ArduinoJson.h>
@@ -533,8 +534,6 @@ void WiFiService::handleDisconnected()
 void WiFiService::onConnected()
 {
     m_wifiState = WiFiState::Connected;
-    m_metrics.connected = true;
-    m_metrics.rssi = WiFi.RSSI();
 
     const auto wasFirstConnection{!m_hasEverConnected};
     m_hasEverConnected = true;
@@ -573,7 +572,6 @@ void WiFiService::onConnected()
 void WiFiService::onDisconnected()
 {
     m_wifiState = WiFiState::Disconnected;
-    m_metrics.connected = false;
     ++m_metrics.disconnectCount;
 
     setState(ServiceState::Ready);

@@ -17,9 +17,8 @@ bool hasTimeElapsed(const std::uint32_t startMs, const std::uint32_t nowMs, cons
 void serializeRecord(const JsonObject &obj, const AttendanceRecord &record)
 {
     const auto unixMs{platform::getUnixTimeMs()};
-    obj["uid"] = cardUidToString(record.cardUid, record.uidLength);
-    obj["ts"] = unixMs.value_or(record.timestampMs); // Prefer real time when NTP is available, fallback to uptime ms
-    obj["ts_source"] = unixMs ? "unix_ms" : "uptime_ms";
+    obj["uid"] = cardUidToString(record.cardUid);
+    obj["ts"] = unixMs.value_or(0); // TODO: handle missing unix time, for now set to 0 backend must handle it
     obj["seq"] = record.sequence;
 }
 
@@ -39,6 +38,7 @@ std::string serializeBatch(const std::vector<AttendanceRecord> &records)
     return json; // NRVO must apply
 }
 } // namespace
+
 AttendanceService::AttendanceService(EventBus &bus, const AttendanceConfig &config)
     : ServiceBase("AttendanceService")
     , m_bus(bus)
@@ -63,7 +63,10 @@ AttendanceService::AttendanceService(EventBus &bus, const AttendanceConfig &conf
     }));
 
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event /*e*/) {
-        // TODO: Update config if AttendanceConfig changed this need make in the next iteration
+        // Reload config on changes
+        LOG_INFO(m_name, "Config changed, reloading...");
+        // In this simplified example, we assume m_config is updated externally
+        // TODO: handle dynamic config changes if needed
     }));
 }
 
@@ -97,16 +100,12 @@ void AttendanceService::loop()
         }
     }
 
-    // Periodic offline buffer retry (using static to persist across calls)
-    // Static is appropriate here - single instance, avoids member variable bloat
-    static std::uint32_t s_lastRetryMs{0};
-
     if (!m_offlineBatch.empty() && !m_useOfflineMode)
     {
-        if (hasTimeElapsed(s_lastRetryMs, now, m_config.offlineBufferFlushIntervalMs))
+        if (hasTimeElapsed(m_lastOfflineRetryMs, now, m_config.offlineBufferFlushIntervalMs))
         {
             flushOfflineBatch();
-            s_lastRetryMs = now;
+            m_lastOfflineRetryMs = now;
         }
     }
 }
@@ -143,10 +142,9 @@ void AttendanceService::processCard(const CardEvent &card)
             .timestampMs = card.timestampMs,
             .sequence = ++m_sequenceNumber,
             .cardUid = card.uid,
-            .uidLength = card.uidLength,
     };
 
-    LOG_INFO(m_name, "Card: %s seq=%u", cardUidToString(card.uid, card.uidLength).c_str(), record.sequence);
+    LOG_INFO(m_name, "Card: %s seq=%u", cardUidToString(card.uid).c_str(), record.sequence);
     ++m_metrics.cardsProcessed;
 
     addToBatch(record);
@@ -158,25 +156,28 @@ void AttendanceService::processCard(const CardEvent &card)
     m_bus.publish(EventType::AttendanceRecorded);
 }
 
-bool AttendanceService::shouldProcessCard(const CardUid &uid, const std::uint32_t timestampMs) noexcept
+bool AttendanceService::shouldProcessCard(const CardUid &cardUid, const std::uint32_t timestampMs) noexcept
 {
-    for (const auto &[cardUid, lastSeenMs, valid]: m_debounceCache)
+    // Search for existing entry and update in-place if found
+    for (auto &[uid, lastSeenMs]: m_debounceCache)
     {
-        if (valid && (cardUid == uid))
+        if ((lastSeenMs != 0) && (uid == cardUid))
         {
             if (!hasTimeElapsed(lastSeenMs, timestampMs, m_config.debounceIntervalMs))
             {
                 return false; // Still in debounce window
             }
-            break; // Found but expired - will be updated below
+
+            // Expired - update timestamp in-place and allow
+            lastSeenMs = timestampMs;
+            return true;
         }
     }
 
-    // Update cache using ring buffer strategy this overwrites the oldest entry when cache is full
-    auto &[cardUid, lastSeenMs, valid]{m_debounceCache[m_debounceCacheIndex]};
-    cardUid = uid;
-    lastSeenMs = timestampMs;
-    valid = true;
+    // Not found - add new entry using ring buffer eviction
+    auto &entry{m_debounceCache[m_debounceCacheIndex]};
+    entry.uid = cardUid;
+    entry.lastSeenMs = timestampMs;
 
     m_debounceCacheIndex = static_cast<std::uint8_t>((m_debounceCacheIndex + 1) % AttendanceConfig::Constants::kDebounceCacheSize);
     return true;

@@ -10,24 +10,6 @@
 
 namespace isic
 {
-/**
- * @brief Feedback pattern definition
- *
- * Timeline per cycle:
- * |<-- ledOnMs -->|<-- ledOffMs -->|
- * |<-- beepMs -->|
- */
-struct FeedbackPattern
-{
-    std::uint16_t ledOnMs{0}; ///< LED on duration per cycle
-    std::uint16_t ledOffMs{0}; ///< LED off duration per cycle
-    std::uint16_t beepMs{0}; ///< Buzzer duration per cycle (0 = silent)
-    std::uint16_t beepFrequencyHz{2000}; ///< Buzzer frequency
-    std::uint8_t repeatCount{1}; ///< Number of cycles (0xFF = infinite)
-    bool useErrorLed{false}; ///< Use error LED instead of status LED (future)
-};
-
-
 class FeedbackService : public ServiceBase
 {
 public:
@@ -56,17 +38,13 @@ public:
     void beepOnce(std::uint16_t durationMs = 100);
     void ledOnce(std::uint16_t durationMs = 100);
 
-    void setEnabled(const bool enabled) noexcept
-    {
-        m_enabled = enabled;
-    }
+    void clearQueue() noexcept;
+    void stopCurrent() noexcept;
+
     [[nodiscard]] bool isEnabled() const noexcept
     {
         return m_enabled;
     }
-
-    void clearQueue() noexcept;
-    void stopCurrent() noexcept;
 
     [[nodiscard]] std::uint8_t getQueueCount() const noexcept
     {
@@ -75,6 +53,11 @@ public:
     [[nodiscard]] bool isBusy() const noexcept
     {
         return m_inPattern || m_queueCount > 0;
+    }
+
+    void serializeMetrics(JsonObject &obj) const override
+    {
+        obj["state"] = toString(getState());
     }
 
 private:
@@ -94,15 +77,16 @@ private:
     std::uint8_t m_queueCount{0}; ///< Current queue size
 
     // Current pattern execution state
-    FeedbackPattern m_currentPattern{};
-    std::uint8_t m_currentRepeat{0};
-    std::uint32_t m_cycleStartMs{0};
-    bool m_inPattern{false};
+    FeedbackPattern m_currentPattern{}; ///< Currently executing pattern
+    std::uint8_t m_currentRepeat{0}; ///< Current repeat count
+    std::uint32_t m_cycleStartMs{0}; ///< Start time of current cycle
+    bool m_inPattern{false}; ///< Whether a pattern is currently being executed
 
-    bool m_enabled{true};
-    bool m_ledCurrentState{false};
-    bool m_buzzerCurrentState{false};
+    bool m_enabled{true}; ///< Service enabled flag
+    bool m_ledCurrentState{false}; ///< Current LED state
+    bool m_buzzerCurrentState{false}; ///< Current buzzer state
 
+    // Subscribed events
     std::vector<EventBus::ScopedConnection> m_eventConnections{};
 };
 } // namespace isic

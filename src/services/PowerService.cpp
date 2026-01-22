@@ -47,7 +47,6 @@ Status PowerService::begin()
     LOG_INFO(m_name, "Initializing PowerService...");
 
     m_wakeupReason = detectWakeupReason();
-    m_metrics.lastWakeupReason = m_wakeupReason;
     LOG_INFO(m_name, "Wakeup reason: %s", toString(m_wakeupReason));
 
     // Load RTC data if waking from deep sleep
@@ -58,7 +57,6 @@ Status PowerService::begin()
             LOG_INFO(m_name, "Restored RTC data: wakeups=%u, totalSleepMs=%u", rtcData_.wakeupCount, rtcData_.totalSleepMs);
 
             m_metrics.wakeupCount = rtcData_.wakeupCount;
-            m_metrics.totalDeepSleepMs = rtcData_.totalSleepMs;
 
             checkChainedSleep();
         }
@@ -74,10 +72,8 @@ Status PowerService::begin()
     m_metrics.wakeupCount = rtcData_.wakeupCount;
 
     m_lastActivityMs = millis();
-    m_metrics.lastActivityMs = m_lastActivityMs;
 
     m_currentState = PowerState::Active;
-    m_metrics.currentState = m_currentState;
 
     setState(ServiceState::Ready);
     publishWakeupOccurred(m_wakeupReason);
@@ -92,8 +88,6 @@ void PowerService::loop()
     {
         return;
     }
-
-    m_metrics.uptimeMs = millis();
 
     if (m_sleepPending)
     {
@@ -112,10 +106,8 @@ void PowerService::loop()
         {
             // Wake from light sleep
             m_lightSleepActive = false;
-            m_metrics.totalLightSleepMs += elapsed;
 
             m_currentState = PowerState::Active;
-            m_metrics.currentState = m_currentState;
             publishStateChange(m_currentState, PowerState::LightSleep);
             recordActivity();
 
@@ -331,7 +323,7 @@ PowerState PowerService::selectSmartSleepDepth()
         }
     }
 
-    m_metrics.smartSleepDecisions++;
+    m_metrics.smartSleepUsed++;
     return selectedState;
 }
 
@@ -442,7 +434,6 @@ void PowerService::enterLightSleepAsync(const std::uint32_t durationMs)
 
     const auto oldState{m_currentState};
     m_currentState = PowerState::LightSleep;
-    m_metrics.currentState = m_currentState;
     m_metrics.lightSleepCycles++;
 
     publishStateChange(m_currentState, oldState);
@@ -465,7 +456,6 @@ void PowerService::enterModemSleepAsync(const std::uint32_t durationMs)
 
     const auto oldState{m_currentState};
     m_currentState = PowerState::ModemSleep;
-    m_metrics.currentState = m_currentState;
     m_metrics.modemSleepCycles++;
 
     publishStateChange(m_currentState, oldState);
@@ -491,11 +481,9 @@ void PowerService::wakeFromModemSleep()
     LOG_INFO(m_name, "Waking from modem sleep");
 
     m_modemSleepActive = false;
-    m_metrics.totalModemSleepMs += (millis() - m_modemSleepStartMs);
 
     const auto oldState{m_currentState};
     m_currentState = PowerState::Active;
-    m_metrics.currentState = m_currentState;
     publishStateChange(m_currentState, oldState);
 
     recordActivity();
@@ -520,18 +508,15 @@ void PowerService::enterDeepSleepAsync(const std::uint32_t durationMs)
     LOG_INFO(m_name, "Entering deep sleep for %ums", actualDuration);
 
     m_metrics.deepSleepCycles++;
-    m_metrics.totalDeepSleepMs += actualDuration;
 
     rtcData_.lastRequestedState = PowerState::DeepSleep;
     rtcData_.remainingSleepMs = remaining;
-    rtcData_.totalSleepMs = m_metrics.totalDeepSleepMs;
     saveToRtcMemory();
 
     prepareForSleep(PowerState::DeepSleep);
 
     const auto oldState{m_currentState};
     m_currentState = PowerState::DeepSleep;
-    m_metrics.currentState = m_currentState;
     publishStateChange(m_currentState, oldState);
 
     // TODO: give services time to prepare for deep sleep
@@ -550,7 +535,6 @@ void PowerService::checkIdleTimeout()
     if (const auto idleMs = getTimeSinceLastActivityMs(); idleMs >= m_config.idleTimeoutMs)
     {
         LOG_INFO(m_name, "Idle timeout reached (%ums)", idleMs);
-        m_metrics.idleTimeoutsTriggered++;
 
         const auto sleepState{selectSmartSleepDepth()};
 
@@ -665,6 +649,7 @@ WakeupReason PowerService::detectWakeupReason()
 void PowerService::publishStateChange(const PowerState newState, const PowerState oldState)
 {
     Event event(EventType::PowerStateChange, PowerEvent{
+                                                     .durationMs = 0,
                                                      .targetState = newState,
                                                      .previousState = oldState,
                                              });
@@ -675,9 +660,9 @@ void PowerService::publishStateChange(const PowerState newState, const PowerStat
 void PowerService::publishSleepRequested(const PowerState state, const std::uint32_t durationMs)
 {
     Event event(EventType::SleepRequested, PowerEvent{
+                                                   .durationMs = durationMs,
                                                    .targetState = state,
                                                    .previousState = m_currentState,
-                                                   .durationMs = durationMs,
                                            });
     event.timestampMs = millis();
     m_bus.publish(event);
@@ -686,7 +671,9 @@ void PowerService::publishSleepRequested(const PowerState state, const std::uint
 void PowerService::publishWakeupOccurred(const WakeupReason reason)
 {
     Event event(EventType::WakeupOccurred, PowerEvent{
+                                                   .durationMs = 0,
                                                    .targetState = PowerState::Active,
+                                                   .previousState = m_currentState,
                                                    .wakeupReason = reason,
                                            });
     event.timestampMs = millis();
@@ -702,7 +689,6 @@ void PowerService::recordActivityInternal(const ActivityType type)
     }
 
     m_lastActivityMs = millis();
-    m_metrics.lastActivityMs = m_lastActivityMs;
     LOG_DEBUG(m_name, "Activity recorded: type=%d", static_cast<uint8_t>(type));
 }
 
@@ -714,6 +700,5 @@ bool PowerService::isActivityTypeEnabled(const ActivityType type) const
 void PowerService::recordActivity()
 {
     m_lastActivityMs = millis();
-    m_metrics.lastActivityMs = m_lastActivityMs;
 }
 } // namespace isic

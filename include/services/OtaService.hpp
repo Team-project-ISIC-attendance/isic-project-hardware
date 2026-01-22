@@ -40,6 +40,11 @@ public:
         return m_progress;
     }
 
+    void serializeMetrics(JsonObject &obj) const override
+    {
+        obj["state"] = toString(getState());
+    }
+
 private:
     void onOtaStart();
     void onOtaEnd(bool success);

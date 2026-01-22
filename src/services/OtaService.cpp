@@ -4,6 +4,7 @@
 #include "services/ConfigService.hpp"
 
 namespace isic {
+// TODO: this service need full re-implemntation with new elegant ota async library
 
 OtaService::OtaService(EventBus& bus, const OtaConfig& config, AsyncWebServer& webServer)
     : ServiceBase("OtaService")
@@ -83,80 +84,73 @@ OtaService::OtaService(EventBus& bus, const OtaConfig& config, AsyncWebServer& w
  *   - If invalid: rollback to previous partition
  */
 Status OtaService::begin() {
-    setState(ServiceState::Initializing);
-    LOG_INFO(m_name, "Initializing OtaService...");
+    // setState(ServiceState::Initializing);
+    // LOG_INFO(m_name, "Initializing OtaService...");
 
-    if (!m_config.enabled) {
-        LOG_INFO(m_name, "OTA disabled");
-        setState(ServiceState::Running);
-        return Status::Ok();
-    }
+    // if (!m_config.enabled) {
+    //     LOG_INFO(m_name, "OTA disabled");
+    //     setState(ServiceState::Running);
+    //     return Status::Ok();
+    // }
 
-    ElegantOTA.onStart([this]() { onOtaStart(); });
-    ElegantOTA.onEnd([this](const bool success) { onOtaEnd(success); });
-    ElegantOTA.onProgress([this](const std::size_t current, const std::size_t total) {
-        onOtaProgress(current, total);
-    });
+    // ElegantOTA.onStart([this]() { onOtaStart(); });
+    // ElegantOTA.onEnd([this](const bool success) { onOtaEnd(success); });
+    // ElegantOTA.onProgress([this](const std::size_t current, const std::size_t total) {
+    //     onOtaProgress(current, total);
+    // });
 
-    if (!m_config.username.empty() && !m_config.password.empty()) {
-        ElegantOTA.begin(&m_webServer, m_config.username.c_str(), m_config.password.c_str());
-        LOG_INFO(m_name, "OtaService ready with authentication at /update");
-    } else {
-        ElegantOTA.begin(&m_webServer);
-        LOG_INFO(m_name, "OtaService ready (no auth) at /update");
-    }
+    // if (!m_config.username.empty() && !m_config.password.empty()) {
+    //     ElegantOTA.begin(&m_webServer, m_config.username.c_str(), m_config.password.c_str());
+    //     LOG_INFO(m_name, "OtaService ready with authentication at /update");
+    // } else {
+    //     ElegantOTA.begin(&m_webServer);
+    //     LOG_INFO(m_name, "OtaService ready (no auth) at /update");
+    // }
 
-    setState(ServiceState::Running);
+    // setState(ServiceState::Running);
     return Status::Ok();
 }
 
 void OtaService::loop() {
-    ElegantOTA.loop(); // Handle OTA web server tasks
+    // ElegantOTA.loop(); // Handle OTA web server tasks
 }
 
 void OtaService::end() {
-    setState(ServiceState::Stopped);
+    // setState(ServiceState::Stopped);
 }
 
 void OtaService::onOtaStart() {
-    LOG_INFO(m_name, "OTA update starting...");
+    // LOG_INFO(m_name, "OTA update starting...");
 
-    m_otaState = OtaState::Downloading;
-    m_progress = 0;
+    // m_otaState = OtaState::Downloading;
+    // m_progress = 0;
 
-    m_bus.publish(EventType::OtaStarted);
+    // m_bus.publish(EventType::OtaStarted);
 }
 
 void OtaService::onOtaEnd(const bool success) {
-    if (success) {
-        LOG_INFO(m_name, "OTA update completed successfully");
-        m_otaState = OtaState::Completed;
-        m_progress = 100;
-        m_bus.publish(EventType::OtaCompleted);
-    } else {
-        LOG_ERROR(m_name, "OTA update failed");
-        m_otaState = OtaState::Error;
-        m_bus.publish(EventType::OtaError);
-    }
+    // if (success) {
+    //     LOG_INFO(m_name, "OTA update completed successfully");
+    //     m_otaState = OtaState::Completed;
+    //     m_progress = 100;
+    //     m_bus.publish(EventType::OtaCompleted);
+    // } else {
+    //     LOG_ERROR(m_name, "OTA update failed");
+    //     m_otaState = OtaState::Error;
+    //     m_bus.publish(EventType::OtaError);
+    // }
 }
 
 void OtaService::onOtaProgress(const std::size_t current, const std::size_t total) {
-    m_progress = (current * 100) / total;
+    // m_progress = (current * 100) / total;
 
-    // Throttle progress events - only log/publish every 10%
-    // Prevents flooding the event bus and serial output
-    static uint8_t lastReported = 0;
-    if (m_progress != lastReported && m_progress % 10 == 0) {
-        LOG_DEBUG(m_name, "OTA progress: %d%%", m_progress);
-        lastReported = m_progress;
-
-        const Event event(EventType::OtaProgress, OtaProgressEvent {
-            .percent = m_progress,
-            .bytesReceived = static_cast<std::uint32_t>(current),
-            .totalBytes = static_cast<std::uint32_t>(total)
-        });
-        m_bus.publish(event);
-    }
+    // // Throttle progress events - only log/publish every 10%
+    // // Prevents flooding the event bus and serial output
+    // static uint8_t lastReported = 0;
+    // if (m_progress != lastReported && m_progress % 10 == 0) {
+    //     LOG_DEBUG(m_name, "OTA progress: %d%%", m_progress);
+    //     lastReported = m_progress;
+    // }
 }
 } // namespace isic
 

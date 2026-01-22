@@ -1,40 +1,68 @@
 #ifndef ISIC_CORE_SIGNAL_HPP
 #define ISIC_CORE_SIGNAL_HPP
 
+/**
+ * @file Signal.hpp
+ * @brief Asynchronous publish/subscribe signal system for embedded systems
+ *
+ * Provides type-safe, thread-safe signal/slot mechanism with deferred
+ * event dispatch. Optimized for resource-constrained microcontrollers
+ * with ISR-safe publishing and deterministic memory usage.
+ */
+
 #include "platform/PlatformMutex.hpp"
 
 #include <algorithm>
 #include <functional>
+#include <tuple>
 #include <vector>
 
 namespace isic
 {
+
 /**
- * @brief Enterprise-grade async publish/subscribe signal system
+ * @class Signal
+ * @brief Thread-safe asynchronous signal with typed arguments
  *
- * @tparam Args Event argument types (must be copyable/movable)
+ * Signal implements the observer pattern with deferred callback invocation.
+ * Events are queued during publish() and delivered to subscribers during
+ * dispatch(), enabling safe event emission from ISR contexts.
  *
- * @warning dispatch() MUST be called from main loop regularly
- * @note Maximum 16 pending events per signal (configurable via MAX_PENDING_EVENTS)
- * @note Event args stored by value (use std::ref for large objects)
+ * @tparam Args Event argument types (must be copyable for queue storage)
  *
- * @example
+ * @par Thread Safety
+ * - publish(): Safe from any context including ISR
+ * - connect()/disconnect(): Safe from any context
+ * - dispatch(): Must be called from main loop only
+ *
+ * @par Memory Model
+ * - Fixed-size ring buffer for pending events (no dynamic allocation on publish)
+ * - Subscriber list grows dynamically but pre-reserves capacity
+ * - Arguments stored by value (use lightweight types or std::ref)
+ *
+ * @par Overflow Policy
+ * When the ring buffer is full, oldest events are dropped (FIFO eviction).
+ * Monitor with pendingCount() to detect saturation.
+ *
+ * @par Usage Example
  * @code
- * Signal<int, std::string> signal;
+ * Signal<int, std::string> onData;
  *
- * // Subscribe
- * auto conn = signal.connect([](int x, const std::string& msg) {
- *     Serial.printf("Received: %d, %s\n", x, msg.c_str());
+ * // Subscribe with RAII cleanup
+ * auto conn = onData.connectScoped([](int code, const std::string& msg) {
+ *     Serial.printf("Received: %d - %s\n", code, msg.c_str());
  * });
  *
- * // Publish (from anywhere, including ISR on ESP32)
- * signal.publish(42, "hello");
+ * // Publish from anywhere (ISR-safe)
+ * onData.publish(42, "hello");
  *
- * // Dispatch (from main loop)
+ * // Dispatch from main loop
  * void loop() {
- *     signal.dispatch();  // Invokes all pending callbacks
+ *     onData.dispatch();  // Invokes callbacks here
  * }
  * @endcode
+ *
+ * @see EventBus for typed event routing across multiple signal types
  */
 template<typename... Args>
 class Signal
@@ -44,18 +72,40 @@ public:
     using Connection = std::size_t;
 
     /**
-     * @brief RAII wrapper for automatic disconnection
+     * @class ScopedConnection
+     * @brief RAII wrapper for automatic signal disconnection
+     *
+     * Automatically disconnects from the signal when destroyed.
+     * Move-only to ensure single ownership of the connection.
+     *
+     * @par Usage
+     * Store as a class member to tie subscription lifetime to object lifetime:
+     * @code
+     * class MyHandler {
+     *     Signal<int>::ScopedConnection m_conn;
+     * public:
+     *     void subscribe(Signal<int>& sig) {
+     *         m_conn = sig.connectScoped([this](int x) { handle(x); });
+     *     }
+     * };  // Auto-disconnects when MyHandler is destroyed
+     * @endcode
      */
     class ScopedConnection
     {
     public:
         ScopedConnection() = default;
-        ScopedConnection(Signal *signal, const Connection id)
+
+        ScopedConnection(Signal *signal, Connection id)
             : m_signal(signal)
             , m_id(id)
         {
         }
 
+        ~ScopedConnection()
+        {
+            disconnect();
+        }
+        // Non-copyable
         ScopedConnection(const ScopedConnection &) = delete;
         ScopedConnection &operator=(const ScopedConnection &) = delete;
 
@@ -71,7 +121,7 @@ public:
         {
             if (this != &other)
             {
-                disconnect(); // Disconnect current if exists
+                disconnect();
                 m_signal = other.m_signal;
                 m_id = other.m_id;
                 other.m_signal = nullptr;
@@ -80,11 +130,7 @@ public:
             return *this;
         }
 
-        ~ScopedConnection()
-        {
-            disconnect();
-        }
-
+        /// Manually disconnect before destruction
         void disconnect()
         {
             if (m_signal && m_id != 0)
@@ -128,25 +174,30 @@ public:
     }
 
     /**
-     * @brief Connect a callback to this signal
+     * @brief Register a callback to receive signal emissions
      *
-     * @param callback Function to call when signal is emitted
-     * @return Connection ID for later disconnection (0 if callback is null)
-     * @note Thread-safe, can be called from any task
+     * @param callback Function to invoke when signal is dispatched
+     * @return Connection handle for manual disconnection, 0 if callback is null
+     *
+     * @note Prefer connectScoped() for automatic lifetime management
+     * @note Thread-safe: can be called from any context
+     *
+     * @par Complexity
+     * O(1) amortized (vector push_back)
      */
     [[nodiscard]] Connection connect(Callback callback)
     {
         if (!callback)
+        {
             return 0;
+        }
 
         LockGuard<Mutex> lock(m_mutex);
 
-        // Pre-allocate capacity on first subscription to avoid reallocations
-        // Most signals have 1-3 subscribers, so reserving 4 slots prevents
-        // the 0→1→2→4 reallocation cascade that fragments ESP8266 heap
+        // Pre-allocate to avoid fragmentation on ESP8266
         if (m_slots.empty())
         {
-            m_slots.reserve(4);
+            m_slots.reserve(kInitialSlotCapacity);
         }
 
         Connection id = ++m_nextId;
@@ -155,7 +206,12 @@ public:
     }
 
     /**
-     * @brief Connect and return a scoped connection
+     * @brief Register a callback with RAII-based automatic cleanup
+     *
+     * @param callback Function to invoke when signal is dispatched
+     * @return ScopedConnection that disconnects on destruction
+     *
+     * @note Store the returned ScopedConnection as a class member
      */
     [[nodiscard]] ScopedConnection connectScoped(Callback callback)
     {
@@ -163,11 +219,13 @@ public:
     }
 
     /**
-     * @brief Disconnect a callback
+     * @brief Remove a subscription using its connection handle
      *
-     * @param id Connection ID returned from connect()
-     * @note Thread-safe, safe to call from within a callback
-     * @note Safe to call multiple times with same ID (no-op after first)
+     * @param id Connection handle from connect()
+     *
+     * @note Thread-safe: can be called from any context
+     * @note Safe to call from within a callback
+     * @note Idempotent: safe to call multiple times with same ID
      */
     void disconnect(Connection id)
     {
@@ -177,66 +235,96 @@ public:
         }
 
         LockGuard<Mutex> lock(m_mutex);
-        const auto findByIndex{[id](const Slot &slot) { return slot.id == id; }};
-        m_slots.erase(std::remove_if(m_slots.begin(), m_slots.end(), findByIndex), m_slots.end());
+        auto it = std::remove_if(m_slots.begin(), m_slots.end(),
+                                 [id](const Slot &slot) { return slot.id == id; });
+        m_slots.erase(it, m_slots.end());
     }
 
     /**
-     * @brief Publish event for async dispatch
+     * @brief Disconnect all subscribers
+     */
+    void clear()
+    {
+        LockGuard<Mutex> lock(m_mutex);
+        m_slots.clear();
+    }
+
+    /**
+     * @brief Queue event arguments for asynchronous delivery
+     *
+     * Copies arguments into the internal ring buffer. Subscribers are
+     * NOT invoked immediately - events are delivered during dispatch().
      *
      * @param args Event arguments to publish
-     * @return true if published successfully, false if buffer full
+     * @return true always (oldest event dropped if buffer full)
      *
-     * @note Does NOT execute callbacks immediately - call dispatch() to process
-     * @note If buffer is full, oldest pending event is dropped (FIFO behavior)
-     * @warning ESP8266 ISR: Keep Args copyable and lightweight (no heap allocation)
+     * @note ISR-safe: can be called from interrupt handlers
+     * @note Events delivered in FIFO order
+     * @warning Keep Args lightweight on ESP8266 ISR (no heap allocation)
+     *
+     * @par Overflow Behavior
+     * When buffer is full, oldest pending event is silently dropped.
+     *
+     * @par Complexity
+     * O(1) for queue insertion
      */
     bool publish(Args... args)
     {
         LockGuard<Mutex> lock(m_mutex);
 
-        // Check if buffer full - drop oldest if needed (ring buffer overflow policy)
-        if (m_pendingCount >= MAX_PENDING_EVENTS)
+        // Ring buffer overflow: drop oldest event
+        if (m_pendingCount >= kMaxPendingEvents)
         {
-            // Ring buffer full - advance read position (drop oldest)
-            m_pendingRead = (m_pendingRead + 1) % MAX_PENDING_EVENTS;
+            m_pendingRead = (m_pendingRead + 1) % kMaxPendingEvents;
             --m_pendingCount;
         }
 
-        // Store event in ring buffer
+        // Store in ring buffer
         m_pendingEvents[m_pendingWrite] = PendingEvent{std::forward<Args>(args)...};
-        m_pendingWrite = (m_pendingWrite + 1) % MAX_PENDING_EVENTS;
+        m_pendingWrite = (m_pendingWrite + 1) % kMaxPendingEvents;
         ++m_pendingCount;
 
         return true;
     }
 
+    /// Convenience: operator() as alias for publish()
+    bool operator()(Args... args)
+    {
+        return publish(std::forward<Args>(args)...);
+    }
+
     /**
-     * @brief Process all pending publications and invoke subscribers
+     * @brief Deliver all queued events to subscribers
+     *
+     * Processes all pending events, invoking registered callbacks for each.
+     * Events published during dispatch are queued for the next cycle.
      *
      * @return Number of events dispatched
      *
-     * @note Thread-safe: Can be called while publish() happens from other contexts
-     * @note Callbacks execute in order of publication (FIFO)
-     * @note Safe to call publish() from within callbacks (events queued for next dispatch)
+     * @warning Must be called from main loop (not ISR-safe)
+     *
+     * @par Re-entrancy
+     * Safe to call publish() from within callbacks - events are queued.
+     *
+     * @par Complexity
+     * O(E * S) where E = pending events, S = subscriber count
      */
     std::size_t dispatch()
     {
         std::size_t dispatched{0};
 
-        // Process all pending events
         while (true)
         {
             PendingEvent event;
             bool hasEvent{false};
 
-            // Critical section: Extract one event
+            // Extract one event under lock
             {
                 LockGuard<Mutex> lock(m_mutex);
                 if (m_pendingCount > 0)
                 {
                     event = std::move(m_pendingEvents[m_pendingRead]);
-                    m_pendingRead = (m_pendingRead + 1) % MAX_PENDING_EVENTS;
+                    m_pendingRead = (m_pendingRead + 1) % kMaxPendingEvents;
                     --m_pendingCount;
                     hasEvent = true;
                 }
@@ -244,7 +332,7 @@ public:
 
             if (!hasEvent)
             {
-                break; // No more pending events
+                break;
             }
 
             // Invoke callbacks with mutex unlocked (allows re-entrant publish)
@@ -255,50 +343,21 @@ public:
         return dispatched;
     }
 
-    /**
-     * @brief Get number of pending events awaiting dispatch
-     *
-     * @return Pending event count
-     */
+    /// Number of events awaiting dispatch
     [[nodiscard]] std::size_t pendingCount() const
     {
         LockGuard<Mutex> lock(m_mutex);
         return m_pendingCount;
     }
 
-    /**
-     * @brief Operator overload for publish
-     */
-    bool operator()(Args... args)
-    {
-        return publish(std::forward<Args>(args)...);
-    }
-
-    /**
-     * @brief Disconnect all callbacks
-     */
-    void clear()
-    {
-        LockGuard<Mutex> lock(m_mutex);
-        m_slots.clear();
-    }
-
-    /**
-     * @brief Get number of connected slots
-     *
-     * @return Number of active connections
-     */
+    /// Number of connected subscribers
     [[nodiscard]] std::size_t size() const
     {
         LockGuard<Mutex> lock(m_mutex);
         return m_slots.size();
     }
 
-    /**
-     * @brief Check if signal has any connected slots
-     *
-     * @return true if no slots are connected
-     */
+    /// True if no subscribers connected
     [[nodiscard]] bool empty() const
     {
         LockGuard<Mutex> lock(m_mutex);
@@ -312,12 +371,7 @@ private:
         Callback callback;
     };
 
-    /**
-     * @brief Storage for pending event arguments
-     *
-     * Stores a tuple of event arguments for deferred dispatch.
-     * Uses decay to store values instead of references (no dangling references).
-     */
+    /// Stores event arguments for deferred dispatch (values, not references)
     struct PendingEvent
     {
         std::tuple<std::decay_t<Args>...> args;
@@ -325,17 +379,12 @@ private:
         PendingEvent() = default;
 
         template<typename... TArgs>
-        explicit PendingEvent(TArgs&&... a)
+        explicit PendingEvent(TArgs &&...a)
             : args(std::forward<TArgs>(a)...)
         {
         }
     };
 
-    /**
-     * @brief Invoke all subscribers with event arguments
-     *
-     * @param event Pending event with stored arguments
-     */
     void invokeCallbacks(PendingEvent &event)
     {
         std::vector<Slot> slotsCopy;
@@ -350,7 +399,7 @@ private:
             slotsCopy = m_slots;
         }
 
-        // Invoke callbacks with mutex unlocked (allows re-entrant operations)
+        // Invoke with mutex unlocked (allows re-entrant operations)
         for (const auto &slot: slotsCopy)
         {
             if (slot.callback)
@@ -360,17 +409,18 @@ private:
         }
     }
 
-    /// Ring buffer size - balance between memory and event burst capacity
-    /// ESP8266: Reduced to 4 to save memory (27 KB across 36 signals)
-    /// With 100 Hz dispatch rate, 4 slots provide adequate buffering
-    static constexpr std::size_t MAX_PENDING_EVENTS{4};
+    /// Ring buffer capacity - tuned for ESP8266 memory constraints
+    static constexpr std::size_t kMaxPendingEvents{4};
+
+    /// Initial slot vector capacity to avoid early reallocations
+    static constexpr std::size_t kInitialSlotCapacity{4};
 
     mutable Mutex m_mutex;
     std::vector<Slot> m_slots;
     Connection m_nextId{0};
 
     // Ring buffer for async event dispatch
-    PendingEvent m_pendingEvents[MAX_PENDING_EVENTS];
+    PendingEvent m_pendingEvents[kMaxPendingEvents];
     std::size_t m_pendingRead{0};
     std::size_t m_pendingWrite{0};
     std::size_t m_pendingCount{0};

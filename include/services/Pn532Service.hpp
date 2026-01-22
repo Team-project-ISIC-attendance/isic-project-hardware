@@ -1,20 +1,23 @@
 #ifndef ISIC_PN532_SERVICE_NO_CARD_EVENT
 #define ISIC_PN532_SERVICE_NO_CARD_EVENT
 
+#include "services/ConfigService.hpp"
 #include "common/Config.hpp"
 #include "core/EventBus.hpp"
 #include "core/IService.hpp"
 
 #include <Adafruit_PN532.h>
+#include <atomic>
 #include <vector>
+#include <memory>
 
 namespace isic
 {
 class Pn532Service : public ServiceBase
 {
 public:
-    Pn532Service(EventBus &bus, const Config& config);
-    ~Pn532Service() override;
+    Pn532Service(EventBus &bus, ConfigService& confiService);
+    ~Pn532Service() override = default;
 
     Pn532Service(const Pn532Service &) = delete;
     Pn532Service &operator=(const Pn532Service &) = delete;
@@ -56,14 +59,36 @@ public:
     {
         return m_metrics;
     }
+
+    void serializeMetrics(JsonObject &obj) const override
+    {
+        obj["state"] = toString(getState());
+        obj["card_reads"] = m_metrics.cardsRead;
+        obj["reads_successful"] = m_metrics.successfulReads;
+        obj["reads_failed"] = m_metrics.readErrors;
+        obj["recoveries"] = m_metrics.recoveryAttempts;
+    }
+
 private:
-    void scanForCard();
+    void startDetection();
+    void handleCardDetected();
+    void pollForCard();
+    void publishCardEvent(const std::uint8_t* uid, std::uint8_t uidLength);
     void handlePowerStateChange(const PowerEvent &power);
+    bool reinitializePn532();
+    bool recoverIrqMode();
+    bool waitForIrqHigh(std::uint32_t timeoutMs);
+    bool attachIrqInterrupt();
+    void detachIrqInterrupt();
+
+    static void IRAM_ATTR isrTrampoline();
+    inline static Pn532Service* s_activeInstance{nullptr};
 
     EventBus &m_bus;
-    const Pn532Config &m_config;
-    const PowerConfig& m_powerConfig;
-    Adafruit_PN532 *m_pn532{nullptr}; // for now raw pointer due to Adafruit library design //TODO: wrap in unique_ptr with custom deleter
+    ConfigService &m_configService;
+    const Pn532Config &m_config; // cached config reference
+
+    std::unique_ptr<Adafruit_PN532> m_pn532{nullptr};
 
     Pn532State m_pn532State{Pn532State::Uninitialized};
     Pn532Metrics m_metrics{};
@@ -74,9 +99,16 @@ private:
     std::uint32_t m_lastPollMs{0};
     std::vector<EventBus::ScopedConnection> m_eventConnections{};
 
-    bool m_cardPresent{false};
+    std::atomic_bool m_irqTriggered{false};
     bool m_isAsleep{false};
     bool m_irqWakeupEnabled{false};
+    bool m_detectionStarted{false};
+    bool m_useIrqMode{false};
+    std::uint32_t m_lastDetectionFailureMs{0};
+    std::uint32_t m_pollIntervalMs{0};
+    std::uint8_t m_consecutiveErrors{0};
+    int m_irqCurr{HIGH};  // Current IRQ pin state for edge detection
+    int m_irqPrev{HIGH};  // Previous IRQ pin state for edge detection
 };
 } // namespace isic
 

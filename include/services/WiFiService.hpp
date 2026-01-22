@@ -1,18 +1,18 @@
 #ifndef ISIC_SERVICES_WIFISERVICE_HPP
 #define ISIC_SERVICES_WIFISERVICE_HPP
 
-#include "common/Config.hpp"
 #include "core/EventBus.hpp"
 #include "core/IService.hpp"
-#include "platform/PlatformWiFi.hpp"
 
 #include <DNSServer.h>
 #include <ESPAsyncWebServer.h>
+
 #include <vector>
 
 namespace isic
 {
 class ConfigService;
+class WiFiConfig;
 
 class WiFiService : public ServiceBase
 {
@@ -45,6 +45,12 @@ public:
     [[nodiscard]] bool isApMode() const
     {
         return m_wifiState == WiFiState::ApMode;
+    }
+
+    void serializeMetrics(JsonObject &obj) const override
+    {
+        obj["state"] = toString(getState());
+        obj["disconnect_count"] = m_metrics.disconnectCount;
     }
 
 private:

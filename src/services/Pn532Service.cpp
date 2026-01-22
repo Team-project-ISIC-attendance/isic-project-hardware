@@ -4,11 +4,18 @@
 
 namespace isic
 {
-Pn532Service::Pn532Service(EventBus &bus, const Config &config)
+void IRAM_ATTR Pn532Service::isrTrampoline()
+{
+    if (s_activeInstance)
+    {
+        s_activeInstance->m_irqTriggered.store(true, std::memory_order_relaxed);
+    }
+}
+Pn532Service::Pn532Service(EventBus &bus, ConfigService &configService)
     : ServiceBase("Pn532Service")
     , m_bus(bus)
-    , m_config(config.pn532)
-    , m_powerConfig(config.power)
+    , m_configService(configService)
+    , m_config(m_configService.getPn532Config())
 {
     m_eventConnections.reserve(1);
 
@@ -20,15 +27,6 @@ Pn532Service::Pn532Service(EventBus &bus, const Config &config)
     }));
 }
 
-Pn532Service::~Pn532Service()
-{
-    if (m_pn532)
-    {
-        delete m_pn532;
-        m_pn532 = nullptr;
-    }
-}
-
 Status Pn532Service::begin()
 {
     LOG_INFO(m_name, "Initializing Pn532Service...");
@@ -36,19 +34,7 @@ Status Pn532Service::begin()
 
     if (!m_pn532)
     {
-        m_pn532 = new Adafruit_PN532(m_config.spiSckPin, m_config.spiMisoPin, m_config.spiMosiPin, m_config.spiCsPin);
-    }
-
-    // Configure reset pin if specified
-    if (m_config.resetPin != 0xFF)
-    {
-        pinMode(m_config.resetPin, OUTPUT);
-        digitalWrite(m_config.resetPin, HIGH);
-        delay(10);
-        digitalWrite(m_config.resetPin, LOW);
-        delay(10);
-        digitalWrite(m_config.resetPin, HIGH);
-        delay(100);
+        m_pn532 = std::make_unique<Adafruit_PN532>(m_config.spiSckPin, m_config.spiMisoPin, m_config.spiMosiPin, m_config.spiCsPin);
     }
 
     m_pn532->begin();
@@ -67,7 +53,20 @@ Status Pn532Service::begin()
     const auto rev{(version >> 8) & 0xFF};
     LOG_INFO(m_name, "PN532 found: IC=0x%02X ver=%d.%d", ic, ver, rev);
 
+    // Decide between IRQ mode (zero overhead) or polling mode (fallback)
+    m_useIrqMode = m_config.useIrq();
+    m_pollIntervalMs = m_config.pollIntervalMs ? m_config.pollIntervalMs : Pn532Config::kDefaultReadTimeoutMs;
+
+    // IMPORTANT: For IRQ mode, configure the IRQ pin BEFORE SAMConfig
+    // SAMConfig generates an initial IRQ pulse that we need to ignore
+    if (m_useIrqMode)
+    {
+        pinMode(m_config.irqPin, INPUT_PULLUP);
+        LOG_DEBUG(m_name, "IRQ pin GPIO%d configured before SAMConfig", m_config.irqPin);
+    }
+
     // Configure SAM (Secure Access Module)
+    // Note: SAMConfig temporarily pulls IRQ LOW, then releases it
     if (!m_pn532->SAMConfig())
     {
         LOG_ERROR(m_name, "SAM config failed");
@@ -76,20 +75,49 @@ Status Pn532Service::begin()
         return Status::Error("SAM config failed");
     }
 
+    // Wait for IRQ to stabilize after SAMConfig (it pulses LOW during config)
+    if (m_useIrqMode)
+    {
+        delay(10); // Allow IRQ to return HIGH after SAMConfig
+    }
+
     m_pn532State = Pn532State::Ready;
     setState(ServiceState::Running);
 
-    // Enable IRQ-based wakeup if configured for power management
-    if (m_powerConfig.enableNfcWakeup)
+    if (m_useIrqMode)
     {
-        if (enableIrqWakeup())
+        // Configure IRQ pin for reading
+        pinMode(m_config.irqPin, INPUT_PULLUP);
+
+        // Enable IRQ-based wakeup if configured for power management
+        if (const auto &powerConfig = m_configService.getPowerConfig();
+            powerConfig.enableNfcWakeup && powerConfig.nfcWakeupPin != 0xFF)
         {
-            LOG_INFO(m_name, "PN532 IRQ wakeup enabled on GPIO%d", m_powerConfig.nfcWakeupPin);
+            if (powerConfig.nfcWakeupPin != m_config.irqPin)
+            {
+                LOG_WARN(m_name, "NFC wakeup pin GPIO%d != PN532 IRQ pin GPIO%d",
+                         powerConfig.nfcWakeupPin,
+                         m_config.irqPin);
+            }
+            if (enableIrqWakeup())
+            {
+                LOG_INFO(m_name, "PN532 IRQ wakeup enabled on GPIO%d", powerConfig.nfcWakeupPin);
+            }
+            else
+            {
+                LOG_WARN(m_name, "Failed to enable PN532 IRQ wakeup");
+            }
         }
-        else
-        {
-            LOG_WARN(m_name, "Failed to enable PN532 IRQ wakeup");
-        }
+
+        // Initialize IRQ state tracking
+        m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
+        LOG_INFO(m_name, "Using IRQ polling mode on GPIO%d (initial state: %s)",
+                 m_config.irqPin, m_irqCurr == HIGH ? "HIGH" : "LOW");
+    }
+
+    if (!m_useIrqMode)
+    {
+        LOG_INFO(m_name, "Using polling mode (interval: %lums)", m_pollIntervalMs);
     }
 
     LOG_INFO(m_name, "Pn532Service ready");
@@ -98,58 +126,159 @@ Status Pn532Service::begin()
 
 void Pn532Service::loop()
 {
-    if ((m_pn532State != Pn532State::Ready) && (getState() != ServiceState::Running))
+    if (m_pn532State != Pn532State::Ready || getState() != ServiceState::Running)
     {
         return;
     }
 
-    if (millis() - m_lastPollMs < m_config.pollIntervalMs)
+    if (m_useIrqMode)
     {
-        return;
-    }
+        // IRQ mode: start detection once, then wait for IRQ to go LOW
+        if (!m_detectionStarted)
+        {
+            startDetection();
+            return;
+        }
 
-    m_lastPollMs = millis();
-    scanForCard();
+        // Poll the IRQ pin state and detect falling edge (HIGH -> LOW)
+        // This is more reliable than hardware interrupts on ESP32 with SPI
+        m_irqCurr = digitalRead(m_config.irqPin);
+
+        // When the IRQ is pulled LOW - the reader has got something for us
+        if (m_irqCurr == LOW && m_irqPrev == HIGH)
+        {
+            LOG_DEBUG(m_name, "Got NFC IRQ (pin went LOW)");
+            handleCardDetected();
+        }
+
+        m_irqPrev = m_irqCurr;
+    }
+    else
+    {
+        // Polling mode: directly poll at configured interval
+        if (millis() - m_lastPollMs >= m_pollIntervalMs)
+        {
+            m_lastPollMs = millis();
+            pollForCard();
+        }
+    }
 }
 
 void Pn532Service::end()
 {
     m_pn532State = Pn532State::Disabled;
+    m_detectionStarted = false;
+    m_irqPrev = m_irqCurr = HIGH;
     setState(ServiceState::Stopped);
 }
 
-void Pn532Service::scanForCard()
+void Pn532Service::startDetection()
 {
-    std::uint8_t uid[7]{0};
-    std::uint8_t uidLength{0};
-
-    if (!m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 50))
+    // Only used in IRQ mode - starts async detection, PN532 signals via IRQ when card found
+    const auto now = millis();
+    if (m_lastDetectionFailureMs != 0 && (now - m_lastDetectionFailureMs) < m_config.recoveryDelayMs)
     {
         return;
     }
 
-    CardUid cardUid;
+    // Reset IRQ state tracking for edge detection
+    m_irqPrev = m_irqCurr = HIGH;
+    m_irqTriggered.store(false, std::memory_order_relaxed);
 
-    const auto copyLen{static_cast<std::size_t>(uidLength < 7 ? uidLength : 7)};
-    for (std::size_t i = 0; i < copyLen; i++)
+    // Use the library's startPassiveTargetIDDetection() which is designed for IRQ mode
+    // This sends InListPassiveTarget command and waits for ACK only (not the response)
+    // The PN532 will pull IRQ LOW when a card is detected
+    //
+    // IMPORTANT: This function returns true if a card is ALREADY present (IRQ already LOW),
+    // in which case we should read it immediately without waiting for IRQ interrupt
+    const bool cardAlreadyPresent = m_pn532->startPassiveTargetIDDetection(PN532_MIFARE_ISO14443A);
+
+    if (cardAlreadyPresent)
     {
-        cardUid[i] = uid[i];
+        // Card was already in the field - read it immediately
+        LOG_DEBUG(m_name, "Card already present during detection start");
+        m_detectionStarted = true;
+        handleCardDetected();
+        return;
     }
 
+    // Check if detection command was sent successfully by verifying IRQ is HIGH
+    // (PN532 pulls IRQ LOW when it has response data ready, HIGH means waiting for card)
+    m_irqCurr = digitalRead(m_config.irqPin);
+    if (m_irqCurr == HIGH)
+    {
+        // Command sent successfully, now waiting for card
+        m_detectionStarted = true;
+        m_lastDetectionFailureMs = 0;
+        m_consecutiveErrors = 0;
+        return;
+    }
+
+    // IRQ is LOW but startPassiveTargetIDDetection returned false - something is wrong
+    ++m_metrics.readErrors;
+    ++m_consecutiveErrors;
+    m_lastDetectionFailureMs = now;
+    m_detectionStarted = false;
+
+    LOG_WARN(m_name, "Failed to start card detection (retry in %lums, errors=%u)",
+             m_config.recoveryDelayMs,
+             m_consecutiveErrors);
+
+    if (m_consecutiveErrors >= m_config.maxConsecutiveErrors)
+    {
+        ++m_metrics.recoveryAttempts;
+        m_consecutiveErrors = 0;
+        if (m_useIrqMode && recoverIrqMode())
+        {
+            LOG_WARN(m_name, "PN532 recovered - retrying IRQ detection");
+            return;
+        }
+        if (m_useIrqMode)
+        {
+            m_useIrqMode = false;
+            m_detectionStarted = false;
+            LOG_WARN(m_name, "IRQ detection failing - falling back to polling (%lums)", m_pollIntervalMs);
+        }
+    }
+}
+
+void Pn532Service::pollForCard()
+{
+    std::uint8_t uid[7]{};
+    std::uint8_t uidLength{};
+    if (m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, m_config.readTimeoutMs))
+    {
+        publishCardEvent(uid, uidLength);
+    }
+}
+
+void Pn532Service::handleCardDetected()
+{
+    std::uint8_t uid[7]{};
+    std::uint8_t uidLength{};
+    if (m_pn532->readDetectedPassiveTargetID(uid, &uidLength))
+    {
+        publishCardEvent(uid, uidLength);
+    }
+    else
+    {
+        ++m_metrics.readErrors;
+        ++m_consecutiveErrors;
+    }
+    m_detectionStarted = false; // Restart detection for next card
+}
+
+void Pn532Service::publishCardEvent(const std::uint8_t* uid, std::uint8_t uidLength)
+{
+    const auto len = std::min<std::size_t>(uidLength, 7);
+    std::copy_n(uid, len, m_lastCardUid.begin());
+
     ++m_metrics.successfulReads;
-    m_metrics.lastReadMs = millis();
-    m_lastCardUid = cardUid;
     m_lastCardUidLength = uidLength;
-    m_lastCardReadMs = millis();
 
-    LOG_DEBUG(m_name, "Card read: %s", cardUidToString(cardUid, uidLength).c_str());
+    LOG_DEBUG(m_name, "Card: %s", cardUidToString(m_lastCardUid, uidLength).c_str());
 
-    m_bus.publish({EventType::CardScanned,
-                   CardEvent{
-                           .uid = cardUid,
-                           .uidLength = uidLength,
-                           .timestampMs = static_cast<std::uint32_t>(millis()),
-                   }});
+    m_bus.publish({EventType::CardScanned, CardEvent{.timestampMs = m_lastCardReadMs, .uid = m_lastCardUid}});
 }
 
 bool Pn532Service::enterSleep()
@@ -196,7 +325,7 @@ bool Pn532Service::enterSleep()
     }
 
     // Prepare PowerDown command
-    uint8_t cmd[2] {0x16, wakeupSources}; // Command byte + WakeUpEnable byte
+    uint8_t cmd[2]{0x16, wakeupSources}; // Command byte + WakeUpEnable byte
 
     // Send PowerDown command and check for ACK
     // Important: After ACK, the PN532 sends a response frame, then enters sleep
@@ -300,17 +429,11 @@ bool Pn532Service::enableIrqWakeup()
 
     LOG_DEBUG(m_name, "SAM reconfigured with IRQ support");
 
-    // Set passive activation retries to infinite (0xFF)
-    // This allows the PN532 to continuously monitor for cards
-    // Critical for wake-on-card functionality
-    if (!m_pn532->setPassiveActivationRetries(0xFF))
-    {
-        LOG_WARN(m_name, "Failed to set passive activation retries (non-critical)");
-    }
-    else
-    {
-        LOG_DEBUG(m_name, "Passive activation retries set to infinite");
-    }
+    // NOTE: We intentionally do NOT call setPassiveActivationRetries() here.
+    // The Adafruit library has a bug where it doesn't read the response frame,
+    // leaving the IRQ pin stuck LOW. For IRQ wakeup from deep sleep, the default
+    // retry settings work fine since the PN532 will continuously scan for cards
+    // in PowerDown mode with RF wakeup enabled.
 
     m_irqWakeupEnabled = true;
 
@@ -324,6 +447,98 @@ void Pn532Service::disableIrqWakeup()
 {
     m_irqWakeupEnabled = false;
     LOG_INFO(m_name, "IRQ wakeup disabled");
+}
+
+bool Pn532Service::reinitializePn532()
+{
+    if (!m_pn532)
+    {
+        return false;
+    }
+
+    if (!m_pn532->begin())
+    {
+        LOG_ERROR(m_name, "PN532 reinit failed - begin() failed");
+        return false;
+    }
+
+    const auto version{m_pn532->getFirmwareVersion()};
+    if (!version)
+    {
+        LOG_ERROR(m_name, "PN532 reinit failed - no firmware response");
+        return false;
+    }
+
+    if (!m_pn532->SAMConfig())
+    {
+        LOG_ERROR(m_name, "PN532 reinit failed - SAM config failed");
+        return false;
+    }
+
+    // NOTE: We intentionally skip setPassiveActivationRetries() here.
+    // The Adafruit library doesn't read the response frame, leaving IRQ stuck LOW.
+    // Default retry settings work fine for both polling and IRQ modes.
+
+    m_pn532State = Pn532State::Ready;
+    return true;
+}
+
+bool Pn532Service::recoverIrqMode()
+{
+    LOG_WARN(m_name, "Attempting PN532 recovery for IRQ detection");
+    if (!reinitializePn532())
+    {
+        LOG_ERROR(m_name, "PN532 recovery failed");
+        return false;
+    }
+    // Reset IRQ state tracking
+    m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
+    m_lastDetectionFailureMs = 0;
+    m_detectionStarted = false;
+    return true;
+}
+
+bool Pn532Service::waitForIrqHigh(std::uint32_t timeoutMs)
+{
+    // Wait for IRQ pin to go HIGH (idle state)
+    // The PN532 pulls IRQ LOW when it has data ready or during certain operations
+    // We must wait for it to release before starting new operations
+    const auto start = millis();
+    while (digitalRead(m_config.irqPin) == LOW)
+    {
+        if (millis() - start >= timeoutMs)
+        {
+            return false;
+        }
+        delay(1);
+    }
+    return true;
+}
+
+bool Pn532Service::attachIrqInterrupt()
+{
+    pinMode(m_config.irqPin, INPUT_PULLUP);
+    // Use waitForIrqHigh instead of single check to handle transient LOW states
+    if (!waitForIrqHigh(50))
+    {
+        LOG_WARN(m_name, "IRQ pin GPIO%d is stuck LOW at attach; check wiring or pull-up", m_config.irqPin);
+        s_activeInstance = nullptr;
+        m_irqTriggered.store(false, std::memory_order_relaxed);
+        return false;
+    }
+    s_activeInstance = this;
+    attachInterrupt(digitalPinToInterrupt(m_config.irqPin), isrTrampoline, FALLING);
+    m_irqTriggered.store(false, std::memory_order_relaxed);
+    LOG_INFO(m_name, "IRQ interrupt attached on GPIO%d", m_config.irqPin);
+    return true;
+}
+
+void Pn532Service::detachIrqInterrupt()
+{
+    detachInterrupt(digitalPinToInterrupt(m_config.irqPin));
+    s_activeInstance = nullptr;
+    m_irqTriggered.store(false, std::memory_order_relaxed);
+    LOG_INFO(m_name, "IRQ interrupt detached");
 }
 
 void Pn532Service::handlePowerStateChange(const PowerEvent &power)

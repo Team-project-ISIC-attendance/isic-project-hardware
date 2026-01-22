@@ -83,7 +83,7 @@ public:
     {
         return m_metrics.wakeupCount;
     }
-    [[nodiscard]] const PowerServiceMetrics &getMetrics() const noexcept
+    [[nodiscard]] const PowerMetrics &getMetrics() const noexcept
     {
         return m_metrics;
     }
@@ -91,6 +91,21 @@ public:
     void requestSleep(PowerState state, std::uint32_t durationMs = 0);
     void cancelSleepRequest();
     void recordActivity();
+
+    void serializeMetrics(JsonObject &obj) const override
+    {
+        obj["state"] = toString(getState());
+        obj["last_wakeup_reason"] = toString(getLastWakeupReason());
+        obj["time_since_last_activity_ms"] = getTimeSinceLastActivityMs();
+
+        obj["light_sleep_cycles"] = m_metrics.lightSleepCycles;
+        obj["modem_sleep_cycles"] = m_metrics.modemSleepCycles;
+        obj["deep_sleep_cycles"] = m_metrics.deepSleepCycles;
+
+        obj["wakeup_count"] = m_metrics.wakeupCount;
+        obj["smart_sleep_used"] = m_metrics.smartSleepUsed;
+        obj["network_aware_sleeps"] = m_metrics.networkAwareSleeps;
+    }
 
 private:
     void handleReadyState();
@@ -142,7 +157,7 @@ private:
     PowerState m_currentState{PowerState::Active};
     WakeupReason m_wakeupReason{WakeupReason::Unknown};
 
-    PowerServiceMetrics m_metrics{};
+    PowerMetrics m_metrics{};
 
     std::uint32_t m_lastActivityMs{0};
 

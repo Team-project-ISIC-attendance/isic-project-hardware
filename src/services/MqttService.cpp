@@ -39,7 +39,6 @@ MqttService::MqttService(EventBus &bus, const MqttConfig &config, const DeviceCo
         if (m_mqttState == MqttState::Connected)
         {
             m_mqttState = MqttState::Disconnected;
-            m_metrics.connected = false;
             setState(ServiceState::Ready);
             m_bus.publish(EventType::MqttDisconnected);
         }
@@ -93,7 +92,6 @@ void MqttService::loop()
         if (m_mqttState == MqttState::Connected)
         {
             m_mqttState = MqttState::Disconnected;
-            m_metrics.connected = false;
 
             // Service no longer fully operational - back to Ready state
             setState(ServiceState::Ready);
@@ -107,16 +105,6 @@ void MqttService::loop()
         if (millis() - m_lastConnectAttemptMs >= backoff)
         {
             connect();
-        }
-    }
-    else
-    {
-        m_mqttClient.loop();
-
-        if (m_mqttState != MqttState::Connected)
-        {
-            m_mqttState = MqttState::Connected;
-            m_metrics.connected = true;
         }
     }
 }
@@ -149,13 +137,11 @@ bool MqttService::publish(const char *topicSuffix, const char *payload, bool ret
         return false;
     }
 
-    std::string topic = buildTopic(topicSuffix);
-    bool success = m_mqttClient.publish(topic.c_str(), payload, retained);
+    const auto success{m_mqttClient.publish(buildTopic(topicSuffix).c_str(), payload, retained)};
 
     if (success)
     {
         ++m_metrics.messagesPublished;
-        m_metrics.lastOperationMs = millis();
     }
     else
     {
@@ -193,7 +179,7 @@ std::string MqttService::buildTopic(const char *suffix) const
     // Use cached prefix for better performance
     std::string topic;
     // Pre-reserve space to avoid reallocation: prefix + suffix + null terminator
-    topic.reserve(m_topicPrefix.length() + std::strlen(suffix) + 1);
+    topic.reserve(m_topicPrefix.length() + strlen(suffix) + 1);
     topic = m_topicPrefix;
     topic += suffix;
     return topic;
@@ -232,7 +218,6 @@ void MqttService::connect()
     {
         LOG_WARN(m_name, "MQTT not configured, cannot connect");
         m_mqttState = MqttState::Error;
-        incrementErrors();
         return;
     }
 
@@ -257,7 +242,6 @@ void MqttService::connect()
     {
         m_consecutiveFailures = 0;
         m_mqttState = MqttState::Connected;
-        m_metrics.connected = true;
         m_metrics.reconnectCount++;
 
         LOG_INFO(m_name, "MQTT connected - service now Running");
@@ -312,7 +296,6 @@ void MqttService::disconnect()
         m_mqttClient.disconnect();
     }
     m_mqttState = MqttState::Disconnected;
-    m_metrics.connected = false;
 }
 
 void MqttService::reconnect()

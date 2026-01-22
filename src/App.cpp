@@ -1,6 +1,7 @@
 #include "App.hpp"
 
 #include <TaskScheduler.h>
+
 #include "common/Logger.hpp"
 
 namespace isic
@@ -13,7 +14,7 @@ App::App()
     , m_wifiService(m_eventBus, m_configService, m_webServer)
     , m_mqttService(m_eventBus, m_configService.get().mqtt, m_configService.get().device)
     , m_otaService(m_eventBus, m_configService.get().ota, m_webServer)
-    , m_pn532Service(m_eventBus, m_configService.get())
+    , m_pn532Service(m_eventBus, m_configService)
     , m_attendanceService(m_eventBus, m_configService.getMutable().attendance)
     , m_feedbackService(m_eventBus, m_configService.getMutable().feedback)
     , m_healthService(m_eventBus, m_configService.getMutable().health)
@@ -37,12 +38,12 @@ Status App::begin()
         return status;
     }
 
-    // Initialize OTA early (before WiFi) so routes are registered before web server starts
-    status = m_otaService.begin();
-    if (status.failed())
-    {
-        LOG_WARN(TAG, "OtaService init failed - continuing without OTA");
-    }
+    // // Initialize OTA early (before WiFi) so routes are registered before web server starts
+    // status = m_otaService.begin();
+    // if (status.failed())
+    // {
+    //     LOG_WARN(TAG, "OtaService init failed - continuing without OTA");
+    // }
 
     // Initialize WiFi (may start in AP mode and begin web server)
     status = m_wifiService.begin();
@@ -79,8 +80,7 @@ Status App::begin()
         return status;
     }
 
-    // Initialize power management EARLY (before heavy services)
-    // PowerService has 7 event subscriptions - initialize it before heap gets fragmented
+    // Initialize power management
     status = m_powerService.begin();
     if (status.failed())
     {
@@ -99,7 +99,7 @@ Status App::begin()
     // Allow heap to stabilize before non-critical services
     yield();
 
-    // Initialize health monitoring (non-critical for boot)
+    // Initialize health monitoring
     status = m_healthService.begin();
     if (status.failed())
     {
@@ -115,7 +115,6 @@ Status App::begin()
     m_healthService.registerComponent(&m_powerService);
     m_healthService.registerComponent(&m_feedbackService);
     m_healthService.registerComponent(&m_otaService);
-
     // Start web server after all services have registered their routes
     startWebServer();
 

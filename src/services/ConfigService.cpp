@@ -3,6 +3,7 @@
 #include "common/Logger.hpp"
 
 #include <LittleFS.h>
+#include <ArduinoJson.h>
 
 namespace isic
 {
@@ -96,7 +97,6 @@ void serializePn532Config(const JsonObject &pn532, const Pn532Config &pn532Confi
     pn532["spiMosiPin"] = pn532Config.spiMosiPin;
     pn532["spiCsPin"] = pn532Config.spiCsPin;
     pn532["irqPin"] = pn532Config.irqPin;
-    pn532["resetPin"] = pn532Config.resetPin;
     pn532["pollIntervalMs"] = pn532Config.pollIntervalMs;
     pn532["readTimeoutMs"] = pn532Config.readTimeoutMs;
     pn532["maxConsecutiveErrors"] = pn532Config.maxConsecutiveErrors;
@@ -315,12 +315,12 @@ bool deserializePn532Config(const JsonVariant &json, Pn532Config &pn532Config)
     PARSE_NUM(json, "spiMosiPin", pn532Config.spiMosiPin);
     PARSE_NUM(json, "spiCsPin", pn532Config.spiCsPin);
     PARSE_NUM(json, "irqPin", pn532Config.irqPin);
-    PARSE_NUM(json, "resetPin", pn532Config.resetPin);
     PARSE_NUM(json, "pollIntervalMs", pn532Config.pollIntervalMs);
     PARSE_NUM(json, "readTimeoutMs", pn532Config.readTimeoutMs);
     PARSE_NUM(json, "maxConsecutiveErrors", pn532Config.maxConsecutiveErrors);
     PARSE_NUM(json, "recoveryDelayMs", pn532Config.recoveryDelayMs);
 
+    pn532Config.restoreDefaults();
     return changed;
 }
 
@@ -582,10 +582,10 @@ Status ConfigService::begin()
         LOG_WARN(m_name, "Load failed or version mismatch, resetting to defaults");
         m_config.restoreDefaults();
 
-        if (LittleFS.exists(CONFIG_FILE))
+        if (LittleFS.exists(kConfigFile))
         {
             LOG_INFO(m_name, "Removing old config file");
-            LittleFS.remove(CONFIG_FILE);
+            LittleFS.remove(kConfigFile);
         }
 
         (void) saveNow(); // TODO: handle failure?
@@ -626,7 +626,7 @@ Status ConfigService::saveNow()
 {
     LOG_DEBUG(m_name, "Saving to %s", CONFIG_FILE);
 
-    auto file = LittleFS.open(CONFIG_FILE, "w");
+    auto file = LittleFS.open(kConfigFile, "w");
     if (!file)
     {
         LOG_ERROR(m_name, "Failed to open for write");
@@ -652,13 +652,13 @@ Status ConfigService::load()
 {
     LOG_DEBUG(m_name, "Loading from %s", CONFIG_FILE);
 
-    if (!LittleFS.exists(CONFIG_FILE))
+    if (!LittleFS.exists(kConfigFile))
     {
         LOG_INFO(m_name, "File not found");
         return Status::Error("Not found");
     }
 
-    auto file{LittleFS.open(CONFIG_FILE, "r")};
+    auto file{LittleFS.open(kConfigFile, "r")};
     if (!file)
     {
         LOG_ERROR(m_name, "Failed to open for read");
