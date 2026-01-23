@@ -624,7 +624,7 @@ Status ConfigService::save()
 
 Status ConfigService::saveNow()
 {
-    LOG_DEBUG(m_name, "Saving to %s", CONFIG_FILE);
+    LOG_DEBUG(m_name, "Saving to %s", kConfigFile);
 
     auto file = LittleFS.open(kConfigFile, "w");
     if (!file)
@@ -650,7 +650,7 @@ Status ConfigService::saveNow()
 
 Status ConfigService::load()
 {
-    LOG_DEBUG(m_name, "Loading from %s", CONFIG_FILE);
+    LOG_DEBUG(m_name, "Loading from %s", kConfigFile);
 
     if (!LittleFS.exists(kConfigFile))
     {

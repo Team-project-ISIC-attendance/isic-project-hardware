@@ -402,7 +402,7 @@ void WiFiService::setupWebServer()
 {
     // Configuration page
     m_webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send_P(200, "text/html", CONFIG_HTML);
+        request->send(200, "text/html", CONFIG_HTML);
     });
 
     // Captive portal detection endpoints

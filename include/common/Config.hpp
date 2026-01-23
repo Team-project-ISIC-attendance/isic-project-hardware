@@ -191,10 +191,10 @@ struct AttendanceConfig
         static constexpr auto kDebounceCacheSize{8};
     };
 
-    static constexpr auto kDefaultDebounceIntervalMs{2'000}; // 2 seconds
-    static constexpr auto kDefaultBatchMaxSize{10}; // 10 records
-    static constexpr auto kDefaultOfflineBufferSize{20}; // 20 records
-    static constexpr auto kDefaultBatchFlushIntervalMs{30'000}; // 30 seconds
+    static constexpr auto kDefaultDebounceIntervalMs{60'000}; // 60 seconds
+    static constexpr auto kDefaultBatchMaxSize{5};
+    static constexpr auto kDefaultOfflineBufferSize{20};
+    static constexpr auto kDefaultBatchFlushIntervalMs{10'000}; // 10 seconds
     static constexpr auto kDefaultBatchingEnabled{false}; // Disabled by default
     static constexpr auto kDefaultOfflineBufferFlushIntervalMs{5'000}; // 5 seconds
     static constexpr auto kDefaultOfflineQueuePolicy{OfflineQueuePolicy::DropOldest}; // Drop oldest by default
@@ -231,11 +231,11 @@ struct FeedbackConfig
         static constexpr auto kPatternQueueSize{8};
     };
 
-    static constexpr auto kDefaultEnabled{true};
+    static constexpr auto kDefaultEnabled{false};
     static constexpr auto kDefaultLedEnabled{true};
-    static constexpr auto kDefaultLedPin{2};
+    static constexpr auto kDefaultLedPin{0xFF};
     static constexpr auto kDefaultBuzzerEnabled{true};
-    static constexpr auto kDefaultBuzzerPin{25};
+    static constexpr auto kDefaultBuzzerPin{0xFF};
     static constexpr auto kDefaultLedActiveHigh{false};
     static constexpr auto kDefaultBeepFrequencyHz{2'000};
     static constexpr auto kDefaultSuccessBlinkDurationMs{100};

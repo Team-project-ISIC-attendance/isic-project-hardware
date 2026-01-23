@@ -275,6 +275,7 @@ void Pn532Service::publishCardEvent(const std::uint8_t* uid, std::uint8_t uidLen
 
     ++m_metrics.successfulReads;
     m_lastCardUidLength = uidLength;
+    m_lastCardReadMs = millis();
 
     LOG_DEBUG(m_name, "Card: %s", cardUidToString(m_lastCardUid, uidLength).c_str());
 

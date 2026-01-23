@@ -133,7 +133,7 @@ void AttendanceService::processCard(const CardEvent &card)
     // Early exit if debounced - most common case for rapid scans
     if (!shouldProcessCard(card.uid, card.timestampMs))
     {
-        LOG_DEBUG(m_name, "Debounced");
+        LOG_INFO(m_name, "Card debounced: %s", cardUidToString(card.uid).c_str());
         ++m_metrics.cardsDebounced;
         return;
     }
@@ -167,7 +167,6 @@ bool AttendanceService::shouldProcessCard(const CardUid &cardUid, const std::uin
             {
                 return false; // Still in debounce window
             }
-
             // Expired - update timestamp in-place and allow
             lastSeenMs = timestampMs;
             return true;

@@ -87,47 +87,11 @@ FeedbackService::FeedbackService(EventBus &bus, FeedbackConfig &config)
     , m_bus(bus)
     , m_config(config)
 {
-    m_eventConnections.reserve(7); // Known subscription count
+    m_eventConnections.reserve(1); // Known subscription count
 
-    // Card scanned - immediate feedback
-    m_eventConnections.push_back(
-            m_bus.subscribeScoped(EventType::CardScanned, [this](const Event &) {
-                queuePattern(PATTERN_CARD_SCANNED);
-            }));
-
-    // Attendance recorded - success confirmation
     m_eventConnections.push_back(
             m_bus.subscribeScoped(EventType::AttendanceRecorded, [this](const Event &) {
                 signalSuccess();
-            }));
-
-    // MQTT connection status
-    m_eventConnections.push_back(
-            m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
-                signalConnected();
-            }));
-
-    m_eventConnections.push_back(
-            m_bus.subscribeScoped(EventType::MqttDisconnected, [this](const Event &) {
-                signalDisconnected();
-            }));
-
-    // OTA events
-    m_eventConnections.push_back(
-            m_bus.subscribeScoped(EventType::OtaStarted, [this](const Event &) {
-                signalOtaStart();
-            }));
-
-    m_eventConnections.push_back(
-            m_bus.subscribeScoped(EventType::OtaCompleted, [this](const Event &) {
-                clearQueue(); // Stop OTA pattern
-                signalOtaComplete();
-            }));
-
-    m_eventConnections.push_back(
-            m_bus.subscribeScoped(EventType::OtaError, [this](const Event &) {
-                clearQueue(); // Stop OTA pattern
-                signalError();
             }));
 }
 

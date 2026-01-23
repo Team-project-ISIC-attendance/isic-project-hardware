@@ -136,7 +136,7 @@ void HealthService::registerComponent(const IService *component)
     }
 
     m_components.push_back(component);
-    LOG_DEBUG(m_name, "Registered component, count=%u", m_componentCount);
+    LOG_DEBUG(m_name, "Registered component, count=%u", m_components.size());
 }
 
 void HealthService::unregisterComponent(const IService *component)
@@ -147,7 +147,7 @@ void HealthService::unregisterComponent(const IService *component)
     }
 
     m_components.erase(std::remove(m_components.begin(), m_components.end(), component), m_components.end());
-    LOG_DEBUG(m_name, "Unregistered component, count=%u", m_componentCount);
+    LOG_DEBUG(m_name, "Unregistered component, count=%u", m_components.size());
 }
 
 void HealthService::updateSystemHealth()
@@ -191,6 +191,9 @@ void HealthService::updateSystemHealth()
 
 void HealthService::publishHealthUpdate()
 {
+    // Ensure health data is fresh before publishing
+    updateSystemHealth();
+
     JsonDocument doc;
     doc["device_id"] = DeviceConfig::kDefaultDeviceId;
     doc["firmware"] = DeviceConfig::Constants::kFirmwareVersion;

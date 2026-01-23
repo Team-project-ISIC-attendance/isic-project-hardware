@@ -424,10 +424,11 @@ inline std::string cardUidToString(const CardUid &uid, const std::uint8_t length
     std::string result;
     result.reserve(length * 2);
 
-    for (std::uint8_t i = 0; i < length; ++i)
+    // Reverse byte order for standard NFC UID display format
+    for (std::uint8_t i = length; i > 0; --i)
     {
-        result += kHexChars[(uid[i] >> 4) & 0x0F];
-        result += kHexChars[uid[i] & 0x0F];
+        result += kHexChars[(uid[i - 1] >> 4) & 0x0F];
+        result += kHexChars[uid[i - 1] & 0x0F];
     }
     return result;
 }
