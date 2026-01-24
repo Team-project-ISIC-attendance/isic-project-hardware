@@ -73,8 +73,10 @@ private:
     void startDetection();
     void handleCardDetected();
     void pollForCard();
+    bool checkForWakeupCard();
     void publishCardEvent(const std::uint8_t* uid, std::uint8_t uidLength);
     void handlePowerStateChange(const PowerEvent &power);
+    void handleWakeupOccurred(const PowerEvent &power);
     bool reinitializePn532();
     bool recoverIrqMode();
     bool waitForIrqHigh(std::uint32_t timeoutMs);

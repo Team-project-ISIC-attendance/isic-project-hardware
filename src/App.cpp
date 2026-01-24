@@ -45,6 +45,44 @@ Status App::begin()
     //     LOG_WARN(TAG, "OtaService init failed - continuing without OTA");
     // }
 
+    // Initialize PN532 NFC reader early for fast wakeup card reads
+    status = m_pn532Service.begin();
+    if (status.failed())
+    {
+        LOG_WARN(TAG, "Pn532Service init failed - continuing without NFC");
+        // Don't fail the app, NFC might be reconnected later
+    }
+
+    // Initialize attendance tracking early so queued card events can be processed
+    status = m_attendanceService.begin();
+    if (status.failed())
+    {
+        LOG_ERROR(TAG, "AttendanceService init failed");
+        m_appState = AppState::Error;
+        return status;
+    }
+
+    // Initialize power management early to detect wakeup reason
+    status = m_powerService.begin();
+    if (status.failed())
+    {
+        LOG_ERROR(TAG, "PowerService init failed");
+        m_appState = AppState::Error;
+        return status;
+    }
+
+    // Fast path: if we woke up from NFC (external or pending), try to read the card
+    if ((m_powerService.getLastWakeupReason() == WakeupReason::External ||
+         m_powerService.isPendingNfcWakeup()) &&
+        m_configService.getPowerConfig().enableNfcWakeup)
+    {
+        LOG_INFO(TAG, "Fast NFC wakeup: dispatching early events before WiFi init");
+        for (int pass = 0; pass < 3 && m_eventBus.pendingCount() > 0; ++pass)
+        {
+            m_eventBus.dispatch();
+        }
+    }
+
     // Initialize WiFi (may start in AP mode and begin web server)
     status = m_wifiService.begin();
     if (status.failed())
@@ -59,32 +97,6 @@ Status App::begin()
     if (status.failed())
     {
         LOG_ERROR(TAG, "MqttService init failed");
-        m_appState = AppState::Error;
-        return status;
-    }
-
-    // Initialize PN532 NFC reader
-    status = m_pn532Service.begin();
-    if (status.failed())
-    {
-        LOG_WARN(TAG, "Pn532Service init failed - continuing without NFC");
-        // Don't fail the app, NFC might be reconnected later
-    }
-
-    // Initialize attendance tracking
-    status = m_attendanceService.begin();
-    if (status.failed())
-    {
-        LOG_ERROR(TAG, "AttendanceService init failed");
-        m_appState = AppState::Error;
-        return status;
-    }
-
-    // Initialize power management
-    status = m_powerService.begin();
-    if (status.failed())
-    {
-        LOG_ERROR(TAG, "PowerService init failed");
         m_appState = AppState::Error;
         return status;
     }
@@ -173,6 +185,13 @@ void App::setupScheduler()
     m_scheduler.addTask(m_eventBusTask);
     m_eventBusTask.enable();
 
+    // Pn532Service task - high frequency for responsive card reading
+    m_pn532Task.set(PN532_INTERVAL_MS, TASK_FOREVER, [this]() {
+        m_pn532Service.loop();
+    });
+    m_scheduler.addTask(m_pn532Task);
+    m_pn532Task.enable();
+
     // ConfigService task - low frequency
     m_configTask.set(CONFIG_INTERVAL_MS, TASK_FOREVER, [this]() {
         m_configService.loop();
@@ -193,13 +212,6 @@ void App::setupScheduler()
     });
     m_scheduler.addTask(m_mqttTask);
     m_mqttTask.enable();
-
-    // Pn532Service task - high frequency for responsive card reading
-    m_pn532Task.set(PN532_INTERVAL_MS, TASK_FOREVER, [this]() {
-        m_pn532Service.loop();
-    });
-    m_scheduler.addTask(m_pn532Task);
-    m_pn532Task.enable();
 
     // AttendanceService task
     m_attendanceTask.set(ATTENDANCE_INTERVAL_MS, TASK_FOREVER, [this]() {

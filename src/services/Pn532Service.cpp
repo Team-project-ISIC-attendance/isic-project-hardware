@@ -1,6 +1,7 @@
 #include "services/Pn532Service.hpp"
 
 #include "common/Logger.hpp"
+#include "platform/PlatformPower.hpp"
 
 namespace isic
 {
@@ -17,12 +18,20 @@ Pn532Service::Pn532Service(EventBus &bus, ConfigService &configService)
     , m_configService(configService)
     , m_config(m_configService.getPn532Config())
 {
-    m_eventConnections.reserve(1);
+    m_eventConnections.reserve(2);
 
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::PowerStateChange, [this](const Event &e) {
         if (const auto *power = e.get<PowerEvent>())
         {
             handlePowerStateChange(*power);
+        }
+    }));
+
+    // Listen for wakeup events to handle NFC-triggered wakeup from deep sleep
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::WakeupOccurred, [this](const Event &e) {
+        if (const auto *power = e.get<PowerEvent>())
+        {
+            handleWakeupOccurred(*power);
         }
     }));
 }
@@ -83,6 +92,9 @@ Status Pn532Service::begin()
 
     m_pn532State = Pn532State::Ready;
     setState(ServiceState::Running);
+
+    // Note: Wakeup card reading is handled by handleWakeupOccurred() event handler
+    // This ensures AttendanceService is ready to receive the CardScanned event
 
     if (m_useIrqMode)
     {
@@ -250,6 +262,42 @@ void Pn532Service::pollForCard()
     {
         publishCardEvent(uid, uidLength);
     }
+}
+
+bool Pn532Service::checkForWakeupCard()
+{
+    // When waking from deep sleep via NFC IRQ, the card that triggered the wakeup
+    // is likely still in the RF field. Try to read it immediately.
+    // We try multiple times with longer timeouts since the user may have just tapped.
+
+    constexpr int kMaxAttempts = 5;
+    constexpr std::uint32_t kReadTimeoutMs = 500; // Longer timeout per attempt
+    constexpr std::uint32_t kRetryDelayMs = 100;
+
+    LOG_INFO(m_name, "Scanning for wakeup card (up to %d attempts, %ums each)...",
+             kMaxAttempts, kReadTimeoutMs);
+
+    for (int attempt = 1; attempt <= kMaxAttempts; ++attempt)
+    {
+        std::uint8_t uid[7]{};
+        std::uint8_t uidLength{};
+
+        LOG_DEBUG(m_name, "Wakeup card read attempt %d/%d...", attempt, kMaxAttempts);
+
+        if (m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, kReadTimeoutMs))
+        {
+            LOG_INFO(m_name, ">>> WAKEUP CARD READ SUCCESS (attempt %d) <<<", attempt);
+            publishCardEvent(uid, uidLength);
+            return true;
+        }
+
+        if (attempt < kMaxAttempts)
+        {
+            delay(kRetryDelayMs);
+        }
+    }
+
+    return false;
 }
 
 void Pn532Service::handleCardDetected()
@@ -569,6 +617,39 @@ void Pn532Service::handlePowerStateChange(const PowerEvent &power)
 
         default:
             break;
+    }
+}
+
+void Pn532Service::handleWakeupOccurred(const PowerEvent &power)
+{
+    // Handle NFC-triggered wakeup from deep sleep
+    // This is called AFTER all services are initialized, so AttendanceService
+    // is ready to receive the CardScanned event
+    if (power.wakeupReason != WakeupReason::External)
+    {
+        return;
+    }
+
+    if (m_pn532State != Pn532State::Ready)
+    {
+        LOG_WARN(m_name, "PN532 not ready for wakeup card read");
+        return;
+    }
+
+    LOG_INFO(m_name, ">>> EXTERNAL WAKEUP - checking for card that triggered wakeup <<<");
+
+    // Check IRQ pin state for diagnostic purposes
+    const auto irqState = digitalRead(m_config.irqPin);
+    LOG_INFO(m_name, "IRQ pin state: %s", irqState == LOW ? "LOW (card may be present)" : "HIGH (no card)");
+
+    if (checkForWakeupCard())
+    {
+        LOG_INFO(m_name, ">>> WAKEUP CARD SUCCESSFULLY READ AND PUBLISHED <<<");
+    }
+    else
+    {
+        LOG_WARN(m_name, "Wakeup card not found - card may have been removed too quickly");
+        LOG_INFO(m_name, "Tip: Hold card on reader until you see confirmation");
     }
 }
 } // namespace isic

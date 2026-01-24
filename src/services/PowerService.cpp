@@ -46,20 +46,39 @@ Status PowerService::begin()
     setState(ServiceState::Initializing);
     LOG_INFO(m_name, "Initializing PowerService...");
 
-    m_wakeupReason = detectWakeupReason();
-    LOG_INFO(m_name, "Wakeup reason: %s", toString(m_wakeupReason));
+    const auto detectedReason = detectWakeupReason();
+    m_wakeupReason = detectedReason;
 
-    // Load RTC data if waking from deep sleep
-    if (m_wakeupReason == WakeupReason::Timer || m_wakeupReason == WakeupReason::External)
+    // Load RTC data (deep sleep may present as external reset on some boards)
+    const bool rtcLoaded = loadFromRtcMemory();
+    const bool deepSleepResume = rtcLoaded && rtcData_.lastRequestedState == PowerState::DeepSleep;
+
+    if (deepSleepResume)
     {
-        if (loadFromRtcMemory())
+        LOG_INFO(m_name, "Restored RTC data: wakeups=%u, totalSleepMs=%u", rtcData_.wakeupCount, rtcData_.totalSleepMs);
+
+        m_metrics.wakeupCount = rtcData_.wakeupCount;
+
+        const bool nfcPending = rtcData_.pendingNfcWakeup != 0;
+        const bool possibleNfcWake =
+                nfcPending &&
+                (m_wakeupReason == WakeupReason::External ||
+                 m_wakeupReason == WakeupReason::PowerOn ||
+                 m_wakeupReason == WakeupReason::Unknown);
+        if (possibleNfcWake)
         {
-            LOG_INFO(m_name, "Restored RTC data: wakeups=%u, totalSleepMs=%u", rtcData_.wakeupCount, rtcData_.totalSleepMs);
+            m_pendingNfcWakeup = true;
+            LOG_INFO(m_name, ">>> NFC WAKEUP PENDING - waiting for card scan <<<");
 
-            m_metrics.wakeupCount = rtcData_.wakeupCount;
-
-            checkChainedSleep();
+            // If wake reason looks like a power-on reset but we expected NFC wake,
+            // treat it as external to trigger fast NFC handling.
+            if (m_wakeupReason == WakeupReason::PowerOn || m_wakeupReason == WakeupReason::Unknown)
+            {
+                m_wakeupReason = WakeupReason::External;
+            }
         }
+
+        checkChainedSleep();
     }
     else
     {
@@ -67,6 +86,14 @@ Status PowerService::begin()
         rtcData_ = RtcData{};
         rtcData_.magic = RtcData::MAGIC;
     }
+
+    if (m_wakeupReason != detectedReason)
+    {
+        LOG_INFO(m_name, "Wakeup reason adjusted: %s -> %s", toString(detectedReason), toString(m_wakeupReason));
+    }
+    LOG_INFO(m_name, "Wakeup reason: %s", toString(m_wakeupReason));
+
+    setNfcWakeGate(false);
 
     rtcData_.wakeupCount++;
     m_metrics.wakeupCount = rtcData_.wakeupCount;
@@ -78,7 +105,18 @@ Status PowerService::begin()
     setState(ServiceState::Ready);
     publishWakeupOccurred(m_wakeupReason);
 
-    LOG_INFO(m_name, "Ready (wakeup #%u, smart=%d, mqttSleep=%d)", m_metrics.wakeupCount, m_config.smartSleepEnabled, m_config.modemSleepOnMqttDisconnect);
+    LOG_INFO(m_name, "=== POWER CONFIG ===");
+    LOG_INFO(m_name, "  autoSleep=%d, idleTimeout=%ums", m_config.autoSleepEnabled, m_config.idleTimeoutMs);
+    LOG_INFO(m_name, "  lightSleep=%ums, modemSleep=%ums, deepSleep=%ums",
+             m_config.lightSleepDurationMs, m_config.modemSleepDurationMs, m_config.sleepIntervalMs);
+    LOG_INFO(m_name, "  smartSleep=%d (short<%ums, medium<%ums)",
+             m_config.smartSleepEnabled, m_config.smartSleepShortThresholdMs, m_config.smartSleepMediumThresholdMs);
+    const int irqPin = (m_config.nfcWakeupPin == 0xFF) ? -1 : m_config.nfcWakeupPin;
+    const int gatePin = (m_config.nfcWakeGatePin == 0xFF) ? -1 : m_config.nfcWakeGatePin;
+    LOG_INFO(m_name, "  nfcWakeup=%d (IRQ GPIO%d, gate GPIO%d)",
+             m_config.enableNfcWakeup, irqPin, gatePin);
+    LOG_INFO(m_name, "===================");
+    LOG_INFO(m_name, "Ready (wakeup #%u, reason=%s)", m_metrics.wakeupCount, toString(m_wakeupReason));
     return Status::Ok();
 }
 
@@ -89,64 +127,61 @@ void PowerService::loop()
         return;
     }
 
-    if (m_sleepPending)
+    // Periodic status log (every 5 seconds)
+    static std::uint32_t lastStatusLog = 0;
+    const auto now = millis();
+    if (now - lastStatusLog >= 5000)
     {
-        if (const auto elapsed = millis() - m_sleepRequestedAtMs; elapsed >= PowerConfig::Constants::kSleepDelayMs)
-        {
-            executePendingSleep();
-            m_sleepPending = false;
-        }
-        return; // Don't process other operations while sleep is pending
+        lastStatusLog = now;
+        LOG_DEBUG(m_name, "[STATUS] state=%s, wifi=%d, mqtt=%d, sleepActive=%d, sleepPending=%d",
+                  m_state == ServiceState::Running ? "Running" : "Ready",
+                  m_flags.wifiReady, m_flags.mqttReady, m_flags.sleepActive, m_flags.sleepPending);
     }
 
-    // Handle active light sleep timer (non-blocking)
-    if (m_lightSleepActive)
+    if (m_flags.sleepPending)
     {
-        if (const auto elapsed = millis() - m_lightSleepStartMs; elapsed >= m_lightSleepDurationMs)
+        const auto elapsed = now - m_sleepRequestedAtMs;
+        if (elapsed >= PowerConfig::Constants::kSleepDelayMs)
         {
-            // Wake from light sleep
-            m_lightSleepActive = false;
-
-            m_currentState = PowerState::Active;
-            publishStateChange(m_currentState, PowerState::LightSleep);
-            recordActivity();
-
-            // Transition to Running if we have dependencies
-            if (m_wifiReady && m_config.autoSleepEnabled)
-            {
-                setState(ServiceState::Running);
-            }
-
-            LOG_INFO(m_name, "Woke from light sleep (%ums)", elapsed);
+            LOG_INFO(m_name, "Executing pending sleep...");
+            executePendingSleep();
+            m_flags.sleepPending = false;
         }
         return;
     }
 
-    // Handle active modem sleep timer (non-blocking)
-    if (m_modemSleepActive)
+    // Handle active sleep timer (light or modem - unified)
+    if (m_flags.sleepActive)
     {
-        if (const auto elapsed = millis() - m_modemSleepStartMs; elapsed >= m_modemSleepDurationMs)
+        const auto elapsed = now - m_sleepStartMs;
+        const auto remaining = m_sleepDurationMs > elapsed ? m_sleepDurationMs - elapsed : 0;
+
+        // Log sleep progress every second
+        static std::uint32_t lastSleepLog = 0;
+        if (now - lastSleepLog >= 1000)
         {
-            // Wake from modem sleep
-            wakeFromModemSleep();
+            lastSleepLog = now;
+            LOG_DEBUG(m_name, "[SLEEPING] %s: %ums / %ums (wake in %ums)",
+                      m_flags.isModemSleep ? "modem" : "light",
+                      elapsed, m_sleepDurationMs, remaining);
+        }
+
+        if (elapsed >= m_sleepDurationMs)
+        {
+            LOG_INFO(m_name, "Sleep timer expired, waking up...");
+            wakeFromSleep();
         }
         return;
     }
 
     // State-specific logic
-    switch (m_state)
+    if (m_state == ServiceState::Ready)
     {
-        case ServiceState::Ready: {
-            handleReadyState();
-            break;
-        }
-        case ServiceState::Running: {
-            handleRunningState();
-            break;
-        }
-        default: {
-            break;
-        }
+        handleReadyState();
+    }
+    else if (m_state == ServiceState::Running)
+    {
+        handleRunningState();
     }
 }
 
@@ -155,25 +190,13 @@ void PowerService::end()
     setState(ServiceState::Stopping);
     LOG_INFO(m_name, "Shutting down...");
 
-    // Cancel any pending sleep
-    if (m_sleepPending)
+    if (m_flags.sleepPending)
     {
         cancelSleepRequest();
     }
 
-    // Wake from any active sleep
-    if (m_lightSleepActive)
-    {
-        m_lightSleepActive = false;
-    }
-    if (m_modemSleepActive)
-    {
-        wakeFromModemSleep();
-    }
-
-    // Save state before shutdown
+    m_flags.sleepActive = false;
     saveToRtcMemory();
-
     eventConnections_.clear();
 
     setState(ServiceState::Stopped);
@@ -182,8 +205,7 @@ void PowerService::end()
 
 void PowerService::handleReadyState()
 {
-    // Transition to Running if auto-sleep is enabled and we're ready
-    if (m_config.autoSleepEnabled && m_wifiReady)
+    if (m_config.autoSleepEnabled && m_flags.wifiReady)
     {
         setState(ServiceState::Running);
         LOG_INFO(m_name, "Transitioning to Running - auto-sleep active");
@@ -193,7 +215,7 @@ void PowerService::handleReadyState()
 void PowerService::handleRunningState()
 {
     // Network-aware automatic modem sleep
-    if (m_config.modemSleepOnMqttDisconnect && !m_mqttReady && !m_modemSleepActive && !m_sleepPending)
+    if (m_config.modemSleepOnMqttDisconnect && !m_flags.mqttReady && !m_flags.sleepActive && !m_flags.sleepPending)
     {
         LOG_INFO(m_name, "MQTT disconnected, entering modem sleep");
         enterModemSleepAsync(m_config.modemSleepDurationMs);
@@ -201,8 +223,7 @@ void PowerService::handleRunningState()
         return;
     }
 
-    // Check idle timeout if auto-sleep is enabled
-    if (m_config.autoSleepEnabled && !m_sleepPending && !m_lightSleepActive && !m_modemSleepActive)
+    if (m_config.autoSleepEnabled && !m_flags.sleepPending && !m_flags.sleepActive)
     {
         checkIdleTimeout();
     }
@@ -210,63 +231,72 @@ void PowerService::handleRunningState()
 
 void PowerService::handleWifiConnected(const Event & /* event */)
 {
-    LOG_DEBUG(m_name, "WiFi connected");
-    m_wifiReady = true;
+    LOG_INFO(m_name, "WiFi connected - activity reset");
+    m_flags.wifiReady = true;
     recordActivityInternal(ActivityType::WifiConnected);
 
-    // Transition to Running if auto-sleep is enabled
     if (m_config.autoSleepEnabled && m_state == ServiceState::Ready)
     {
         setState(ServiceState::Running);
+        LOG_INFO(m_name, "Auto-sleep now active");
     }
 }
 
 void PowerService::handleWifiDisconnected(const Event & /* event */)
 {
-    LOG_DEBUG(m_name, "WiFi disconnected");
-    m_wifiReady = false;
+    LOG_INFO(m_name, "WiFi disconnected");
+    m_flags.wifiReady = false;
 
-    // Back to Ready state if we were Running
     if (m_state == ServiceState::Running)
     {
         setState(ServiceState::Ready);
+        LOG_INFO(m_name, "Auto-sleep paused (no WiFi)");
     }
 }
 
 void PowerService::handleMqttConnected(const Event & /* event */)
 {
-    LOG_DEBUG(m_name, "MQTT connected");
-    m_mqttReady = true;
+    LOG_INFO(m_name, "MQTT connected - activity reset");
+    m_flags.mqttReady = true;
     recordActivityInternal(ActivityType::MqttConnected);
 
-    // If in modem sleep due to MQTT disconnect, wake up
-    if (m_modemSleepActive)
+    if (m_flags.sleepActive && m_flags.isModemSleep)
     {
         LOG_INFO(m_name, "MQTT reconnected, waking from modem sleep");
-        wakeFromModemSleep();
+        wakeFromSleep();
     }
 }
 
 void PowerService::handleMqttDisconnected(const Event & /* event */)
 {
-    LOG_DEBUG(m_name, "MQTT disconnected");
-    m_mqttReady = false;
+    LOG_INFO(m_name, "MQTT disconnected");
+    m_flags.mqttReady = false;
 }
 
 void PowerService::handleCardScanned(const Event & /* event */)
 {
+    LOG_INFO(m_name, ">>> CARD SCANNED - IRQ triggered <<<");
     recordActivityInternal(ActivityType::CardScanned);
 
-    // Cancel pending sleep on card scan
-    if (m_sleepPending)
+    if (m_flags.sleepActive)
     {
-        LOG_DEBUG(m_name, "Card scan cancelled pending sleep");
+        LOG_INFO(m_name, "Card scan waking from %s sleep", m_flags.isModemSleep ? "modem" : "light");
+        wakeFromSleep();
+    }
+    else if (m_flags.sleepPending)
+    {
+        LOG_INFO(m_name, "Card scan cancelled pending sleep");
         cancelSleepRequest();
+    }
+    else
+    {
+        LOG_INFO(m_name, "Card scan - idle timer reset");
     }
 }
 
 void PowerService::handleMqttMessage(const Event & /* event */)
 {
+    LOG_DEBUG(m_name, "MQTT message - activity reset");
     recordActivityInternal(ActivityType::MqttMessage);
 }
 
@@ -277,54 +307,31 @@ void PowerService::handleNfcReady(const Event & /* event */)
 
 PowerState PowerService::selectSmartSleepDepth()
 {
-    // If smart sleep is disabled, use default light sleep
     if (!m_config.smartSleepEnabled)
     {
         return PowerState::LightSleep;
     }
 
-    const auto estimatedIdleMs{estimateIdleDuration()};
+    const auto estimatedIdleMs = estimateIdleDuration();
+    m_metrics.smartSleepUsed++;
 
-    // Decision tree for sleep depth
-    PowerState selectedState;
+    // Short idle: light sleep
     if (estimatedIdleMs < m_config.smartSleepShortThresholdMs)
     {
-        // Short idle: use light sleep (WiFi stays connected)
-        selectedState = PowerState::LightSleep;
-        LOG_DEBUG(m_name, "Smart sleep: light (estimated %ums idle)", estimatedIdleMs);
-    }
-    else if (estimatedIdleMs < m_config.smartSleepMediumThresholdMs)
-    {
-        // Medium idle: use modem sleep if MQTT down, otherwise light sleep
-        if (!m_mqttReady)
-        {
-            selectedState = PowerState::ModemSleep;
-            LOG_DEBUG(m_name, "Smart sleep: modem (MQTT down, %ums idle)", estimatedIdleMs);
-        }
-        else
-        {
-            selectedState = PowerState::LightSleep;
-            LOG_DEBUG(m_name, "Smart sleep: light (MQTT up, %ums idle)", estimatedIdleMs);
-        }
-    }
-    else
-    {
-        // Long idle: use deep sleep (check if operations are complete)
-        if (canEnterSleep())
-        {
-            selectedState = PowerState::DeepSleep;
-            LOG_DEBUG(m_name, "Smart sleep: deep (%ums idle)", estimatedIdleMs);
-        }
-        else
-        {
-            // Pending operations - use modem sleep
-            selectedState = PowerState::ModemSleep;
-            LOG_DEBUG(m_name, "Smart sleep: modem (pending ops, %ums idle)", estimatedIdleMs);
-        }
+        return PowerState::LightSleep;
     }
 
-    m_metrics.smartSleepUsed++;
-    return selectedState;
+    // Medium idle: modem sleep if MQTT down
+    if (estimatedIdleMs < m_config.smartSleepMediumThresholdMs)
+    {
+        return m_flags.mqttReady ? PowerState::LightSleep : PowerState::ModemSleep;
+    }
+
+    // Long idle: deep sleep if ready
+    // NOTE: On ESP8266, NFC wake requires wiring PN532 IRQ -> RST (hardware reset).
+    // We still allow deep sleep here to support RST wake on both platforms.
+
+    return canEnterSleep() ? PowerState::DeepSleep : PowerState::ModemSleep;
 }
 
 std::uint32_t PowerService::estimateIdleDuration() const
@@ -355,6 +362,22 @@ bool PowerService::canEnterSleep() const
     return true;
 }
 
+std::uint32_t PowerService::getDurationForState(PowerState state) const
+{
+    switch (state)
+    {
+        case PowerState::LightSleep:
+            return m_config.lightSleepDurationMs;
+        case PowerState::ModemSleep:
+            return m_config.modemSleepDurationMs;
+        case PowerState::DeepSleep:
+        case PowerState::Hibernating:
+            return m_config.sleepIntervalMs;
+        default:
+            return m_config.lightSleepDurationMs;
+    }
+}
+
 void PowerService::requestSleep(const PowerState state, std::uint32_t durationMs)
 {
     if (state == PowerState::Active)
@@ -365,32 +388,13 @@ void PowerService::requestSleep(const PowerState state, std::uint32_t durationMs
 
     if (durationMs == 0)
     {
-        switch (state)
-        {
-            case PowerState::LightSleep: {
-                durationMs = m_config.lightSleepDurationMs;
-                break;
-            }
-            case PowerState::ModemSleep: {
-                durationMs = m_config.modemSleepDurationMs;
-                break;
-            }
-            case PowerState::DeepSleep:
-            case PowerState::Hibernating: {
-                durationMs = m_config.sleepIntervalMs;
-                break;
-            }
-            default: {
-                break;
-            }
-        }
+        durationMs = getDurationForState(state);
     }
 
     LOG_INFO(m_name, "Sleep requested: state=%s, duration=%ums", toString(state), durationMs);
     publishSleepRequested(state, durationMs);
 
-    // Queue the sleep request (allow time for event handlers)
-    m_sleepPending = true;
+    m_flags.sleepPending = true;
     m_pendingSleepState = state;
     m_pendingSleepDurationMs = durationMs;
     m_sleepRequestedAtMs = millis();
@@ -398,10 +402,10 @@ void PowerService::requestSleep(const PowerState state, std::uint32_t durationMs
 
 void PowerService::cancelSleepRequest()
 {
-    if (m_sleepPending)
+    if (m_flags.sleepPending)
     {
         LOG_INFO(m_name, "Sleep request cancelled");
-        m_sleepPending = false;
+        m_flags.sleepPending = false;
     }
 }
 
@@ -430,136 +434,132 @@ void PowerService::executePendingSleep()
 
 void PowerService::enterLightSleepAsync(const std::uint32_t durationMs)
 {
-    LOG_INFO(m_name, "Entering light sleep for %ums (async)", durationMs);
+    LOG_INFO(m_name, ">>> ENTERING LIGHT SLEEP for %ums <<<", durationMs);
+    LOG_INFO(m_name, "    (CPU active, WiFi connected, IRQ works)");
 
-    const auto oldState{m_currentState};
+    const auto oldState = m_currentState;
     m_currentState = PowerState::LightSleep;
     m_metrics.lightSleepCycles++;
 
     publishStateChange(m_currentState, oldState);
 
-    // Start non-blocking light sleep timer
-    m_lightSleepActive = true;
-    m_lightSleepStartMs = millis();
-    m_lightSleepDurationMs = durationMs;
-
-    // Services handle their own power state via PowerStateChange event
-    // WiFiService will configure light sleep mode
-    // Pn532Service will enter low-power mode
-
-    LOG_DEBUG(m_name, "Light sleep timer started");
+    m_flags.sleepActive = true;
+    m_flags.isModemSleep = false;
+    m_sleepStartMs = millis();
+    m_sleepDurationMs = durationMs;
 }
 
 void PowerService::enterModemSleepAsync(const std::uint32_t durationMs)
 {
-    LOG_INFO(m_name, "Entering modem sleep for %ums", durationMs);
+    LOG_INFO(m_name, ">>> ENTERING MODEM SLEEP for %ums <<<", durationMs);
+    LOG_INFO(m_name, "    (CPU active, WiFi OFF, IRQ works)");
 
-    const auto oldState{m_currentState};
+    const auto oldState = m_currentState;
     m_currentState = PowerState::ModemSleep;
     m_metrics.modemSleepCycles++;
 
     publishStateChange(m_currentState, oldState);
 
-    // Start non-blocking modem sleep timer
-    m_modemSleepActive = true;
-    m_modemSleepStartMs = millis();
-    m_modemSleepDurationMs = durationMs;
-
-    // WiFiService subscribes to PowerStateChange and will turn off RF
-    // Pn532Service subscribes and will enter low-power mode
-
-    LOG_INFO(m_name, "Modem sleep active");
+    m_flags.sleepActive = true;
+    m_flags.isModemSleep = true;
+    m_sleepStartMs = millis();
+    m_sleepDurationMs = durationMs;
 }
 
-void PowerService::wakeFromModemSleep()
+void PowerService::wakeFromSleep()
 {
-    if (!m_modemSleepActive)
+    if (!m_flags.sleepActive)
     {
         return;
     }
 
-    LOG_INFO(m_name, "Waking from modem sleep");
+    const auto wasModem = m_flags.isModemSleep;
+    const auto sleptMs = millis() - m_sleepStartMs;
+    m_flags.sleepActive = false;
 
-    m_modemSleepActive = false;
-
-    const auto oldState{m_currentState};
+    const auto oldState = m_currentState;
     m_currentState = PowerState::Active;
     publishStateChange(m_currentState, oldState);
 
     recordActivity();
+
+    if (m_flags.wifiReady && m_config.autoSleepEnabled)
+    {
+        setState(ServiceState::Running);
+    }
+
+    LOG_INFO(m_name, ">>> WOKE from %s sleep (slept %ums) <<<", wasModem ? "modem" : "light", sleptMs);
 }
 
 void PowerService::enterDeepSleepAsync(const std::uint32_t durationMs)
 {
-    // Deep sleep is inherently blocking (device resets on wakeup)
-    // This "async" just means we delayed before calling it
-
-    // Clamp duration to ESP8266 limit
-    std::uint32_t actualDuration{durationMs};
-    std::uint32_t remaining{0};
+    // Clamp duration to platform limit, chain remaining
+    std::uint32_t actualDuration = durationMs;
+    std::uint32_t remaining = 0;
 
     if (durationMs > m_config.maxDeepSleepMs)
     {
         actualDuration = m_config.maxDeepSleepMs;
         remaining = durationMs - actualDuration;
-        LOG_INFO(m_name, "Deep sleep chained: sleeping %ums, remaining %ums", actualDuration, remaining);
+        LOG_INFO(m_name, "Deep sleep chained: %ums now, %ums remaining", actualDuration, remaining);
     }
 
-    LOG_INFO(m_name, "Entering deep sleep for %ums", actualDuration);
+    LOG_INFO(m_name, ">>> ENTERING DEEP SLEEP for %ums <<<", actualDuration);
+    LOG_INFO(m_name, "    (CPU OFF, WiFi OFF, device will RESET on wake)");
 
     m_metrics.deepSleepCycles++;
 
     rtcData_.lastRequestedState = PowerState::DeepSleep;
     rtcData_.remainingSleepMs = remaining;
+    rtcData_.pendingNfcWakeup = m_config.enableNfcWakeup ? 1 : 0;
     saveToRtcMemory();
 
     prepareForSleep(PowerState::DeepSleep);
 
-    const auto oldState{m_currentState};
+    if (m_config.enableNfcWakeup)
+    {
+        LOG_INFO(m_name, "NFC wakeup via RST (wire PN532 IRQ -> RST)");
+    }
+    else
+    {
+        LOG_INFO(m_name, "Timer-only wakeup (NFC wakeup disabled)");
+    }
+
+    const auto oldState = m_currentState;
     m_currentState = PowerState::DeepSleep;
     publishStateChange(m_currentState, oldState);
 
-    // TODO: give services time to prepare for deep sleep
-    delay(100); // is blocks so no ok rewrite in the meantime
+    LOG_INFO(m_name, "Going to sleep NOW... goodbye!");
+    delay(50);
 
-    // Enter deep sleep - execution stops here
-    const auto sleepUs{static_cast<uint64_t>(actualDuration) * 1000ULL};
-    platform::deepSleep(sleepUs);
-
-    // TODO: give services time to prepare for deep sleep Note: Execution stops here. Device resets on wakeup.
-    delay(100); // is blocks so no ok rewrite in the meantime
+    // Enter deep sleep - device resets on wakeup, code below never executes
+    platform::deepSleep(static_cast<uint64_t>(actualDuration) * 1000ULL);
 }
 
 void PowerService::checkIdleTimeout()
 {
-    if (const auto idleMs = getTimeSinceLastActivityMs(); idleMs >= m_config.idleTimeoutMs)
+    const auto idleMs = getTimeSinceLastActivityMs();
+
+    // Log idle progress every second (approximately)
+    static std::uint32_t lastLoggedSec = 0;
+    const auto idleSec = idleMs / 1000;
+    if (idleSec != lastLoggedSec && idleSec > 0)
     {
-        LOG_INFO(m_name, "Idle timeout reached (%ums)", idleMs);
-
-        const auto sleepState{selectSmartSleepDepth()};
-
-        std::uint32_t duration;
-        switch (sleepState)
+        lastLoggedSec = idleSec;
+        const auto remainingSec = (m_config.idleTimeoutMs - idleMs) / 1000;
+        if (remainingSec <= 5 || idleSec % 2 == 0) // Log more frequently near timeout
         {
-            case PowerState::LightSleep: {
-                duration = m_config.lightSleepDurationMs;
-                break;
-            }
-            case PowerState::ModemSleep: {
-                duration = m_config.modemSleepDurationMs;
-                break;
-            }
-            case PowerState::DeepSleep: {
-                duration = m_config.sleepIntervalMs;
-                break;
-            }
-            default: {
-                duration = m_config.lightSleepDurationMs;
-                break;
-            }
+            LOG_INFO(m_name, "Idle: %us / %us (sleep in %us)",
+                     idleSec, m_config.idleTimeoutMs / 1000, remainingSec);
         }
+    }
 
-        requestSleep(sleepState, duration);
+    if (idleMs >= m_config.idleTimeoutMs)
+    {
+        lastLoggedSec = 0; // Reset for next cycle
+        const auto sleepState = selectSmartSleepDepth();
+        LOG_INFO(m_name, ">>> IDLE TIMEOUT - selecting %s <<<", toString(sleepState));
+        requestSleep(sleepState, getDurationForState(sleepState));
     }
 }
 
@@ -581,6 +581,16 @@ void PowerService::prepareForSleep(const PowerState state)
     LOG_DEBUG(m_name, "Preparing for %s", toString(state));
 
     // TODO: notify services to prepare for sleep via event
+
+    if (m_config.enableNfcWakeup && m_config.nfcWakeGatePin != 0xFF)
+    {
+        const bool enableGate = (state == PowerState::DeepSleep || state == PowerState::Hibernating);
+        setNfcWakeGate(enableGate);
+        if (enableGate)
+        {
+            delay(2);
+        }
+    }
 
     // Flush any pending serial output
     Serial.flush();
@@ -700,5 +710,16 @@ bool PowerService::isActivityTypeEnabled(const ActivityType type) const
 void PowerService::recordActivity()
 {
     m_lastActivityMs = millis();
+}
+
+void PowerService::setNfcWakeGate(const bool enabled)
+{
+    if (m_config.nfcWakeGatePin == 0xFF)
+    {
+        return;
+    }
+
+    pinMode(m_config.nfcWakeGatePin, OUTPUT);
+    digitalWrite(m_config.nfcWakeGatePin, enabled ? HIGH : LOW);
 }
 } // namespace isic

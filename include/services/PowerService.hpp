@@ -26,6 +26,8 @@ struct RtcData
     std::uint32_t totalSleepMs{0};
     PowerState lastRequestedState{PowerState::Active};
     std::uint32_t remainingSleepMs{0}; // For chained deep sleep
+    std::uint8_t pendingNfcWakeup{0};  // Set when entering deep sleep with NFC wakeup
+    std::uint8_t reserved[3]{};        // Padding for alignment
     std::uint32_t crc32{0};
 
     [[nodiscard]] bool isValid() const
@@ -77,7 +79,7 @@ public:
     }
     [[nodiscard]] bool isSleepPending() const noexcept
     {
-        return m_sleepPending;
+        return m_flags.sleepPending;
     }
     [[nodiscard]] std::uint32_t getWakeupCount() const noexcept
     {
@@ -86,6 +88,14 @@ public:
     [[nodiscard]] const PowerMetrics &getMetrics() const noexcept
     {
         return m_metrics;
+    }
+    [[nodiscard]] bool isPendingNfcWakeup() const noexcept
+    {
+        return m_pendingNfcWakeup;
+    }
+    void clearPendingNfcWakeup() noexcept
+    {
+        m_pendingNfcWakeup = false;
     }
 
     void requestSleep(PowerState state, std::uint32_t durationMs = 0);
@@ -128,7 +138,8 @@ private:
     void enterModemSleepAsync(std::uint32_t durationMs);
     void enterDeepSleepAsync(std::uint32_t durationMs);
 
-    void wakeFromModemSleep();
+    void wakeFromSleep();
+    [[nodiscard]] std::uint32_t getDurationForState(PowerState state) const;
 
     void checkIdleTimeout();
     void checkChainedSleep();
@@ -147,38 +158,42 @@ private:
 
     void recordActivityInternal(ActivityType type);
     [[nodiscard]] bool isActivityTypeEnabled(ActivityType type) const;
+    void setNfcWakeGate(bool enabled);
 
     EventBus &m_bus;
     const PowerConfig &m_config;
 
-    bool m_wifiReady{false}; // Set by WifiConnected/Disconnected events
-    bool m_mqttReady{false}; // Set by MqttConnected/Disconnected events
+    // Packed flags to save RAM (6 bools -> 1 byte instead of 6 bytes)
+    struct Flags
+    {
+        std::uint8_t wifiReady : 1;
+        std::uint8_t mqttReady : 1;
+        std::uint8_t sleepPending : 1;
+        std::uint8_t sleepActive : 1;      // Unified: light or modem sleep active
+        std::uint8_t isModemSleep : 1;     // If sleepActive: true=modem, false=light
+        std::uint8_t reserved : 3;
+    };
+    Flags m_flags{};
 
     PowerState m_currentState{PowerState::Active};
+    PowerState m_pendingSleepState{PowerState::Active};
     WakeupReason m_wakeupReason{WakeupReason::Unknown};
 
     PowerMetrics m_metrics{};
 
     std::uint32_t m_lastActivityMs{0};
-
-    // Sleep request state
-    bool m_sleepPending{false};
-    PowerState m_pendingSleepState{PowerState::Active};
     std::uint32_t m_pendingSleepDurationMs{0};
     std::uint32_t m_sleepRequestedAtMs{0};
 
-    // Light sleep state machine
-    bool m_lightSleepActive{false};
-    std::uint32_t m_lightSleepStartMs{0};
-    std::uint32_t m_lightSleepDurationMs{0};
-
-    // Modem sleep state
-    bool m_modemSleepActive{false};
-    std::uint32_t m_modemSleepStartMs{0};
-    std::uint32_t m_modemSleepDurationMs{0};
+    // Unified sleep timer (light/modem share same tracking)
+    std::uint32_t m_sleepStartMs{0};
+    std::uint32_t m_sleepDurationMs{0};
 
     // RTC data for deep sleep persistence
     RtcData rtcData_{};
+
+    // Pending NFC wakeup - keep awake until card is read
+    bool m_pendingNfcWakeup{false};
 
     std::vector<EventBus::ScopedConnection> eventConnections_;
 };

@@ -342,21 +342,25 @@ struct PowerConfig
         static constexpr auto kSleepDelayMs{100};
     };
 
-    static constexpr auto kDefaultDeepSleepDurationMs{300'000}; // 5 minutes
+    static constexpr auto kDefaultDeepSleepDurationMs{60'000}; // 1 minute
     static constexpr auto kDefaultMaxDeepSleepMs{3'500'000}; // ~58 min (ESP8266 limit)
-    static constexpr auto kDefaultLightSleepDurationMs{10'000}; // 10 seconds
-    static constexpr auto kDefaultIdleTimeoutMs{60'000}; // 1 minute
+    static constexpr auto kDefaultLightSleepDurationMs{30'000}; // 30 seconds
+    static constexpr auto kDefaultIdleTimeoutMs{5'000}; // 5 seconds idle before sleep
     static constexpr auto kDefaultEnableTimerWakeup{true};
-    static constexpr auto kDefaultEnableNfcWakeup{false};
-    static constexpr auto kDefaultNfcWakeupPin{4}; // GPIO4 for PN532 IRQ
-    static constexpr auto kDefaultAutoSleepEnabled{false};
+    static constexpr auto kDefaultEnableNfcWakeup{true}; // enabled for testing
+    static constexpr auto kDefaultNfcWakeupPin{27};   // IRQ pin for polling during normal operation
+    static constexpr auto kDefaultNfcWakeGatePin{0xFF}; // GPIO that enables IRQ->RST gate (0xFF = disabled)
+    // NOTE: For ESP8266 deep sleep NFC wakeup, wire PN532 IRQ through a gate to ESP RST:
+    // - nfcWakeupPin: GPIO connected to PN532 IRQ (for polling in normal mode)
+    // - nfcWakeGatePin: GPIO that controls transistor gate (HIGH = allow wakeup, LOW = block)
+    static constexpr auto kDefaultAutoSleepEnabled{true}; // enabled for testing
     static constexpr auto kDefaultDisableWiFiDuringSleep{true};
     static constexpr auto kDefaultPn532SleepBetweenScans{true};
     static constexpr auto kDefaultSmartSleepEnabled{true};
-    static constexpr auto kDefaultModemSleepOnMqttDisconnect{true};
+    static constexpr auto kDefaultModemSleepOnMqttDisconnect{false}; // disabled for cleaner testing
     static constexpr auto kDefaultModemSleepDurationMs{30'000}; // 30 seconds
-    static constexpr auto kDefaultSmartSleepShortThresholdMs{30'000}; // <30s = light sleep
-    static constexpr auto kDefaultSmartSleepMediumThresholdMs{300'000}; // <5m = modem, >5m = deep
+    static constexpr auto kDefaultSmartSleepShortThresholdMs{10'000}; // <10s idle = light sleep
+    static constexpr auto kDefaultSmartSleepMediumThresholdMs{30'000}; // <30s idle = modem, >30s = deep
     static constexpr auto kDefaultActivityTypeMask{0b00111}; // Card, MQTT msg, WiFi. Activity type bitmask - which events reset idle timer Bit 0: CardScanned, Bit 1: MqttMessage, Bit 2: WifiConnected, Bit 3: MqttConnected, Bit 4: NfcReady
 
     std::uint32_t sleepIntervalMs{kDefaultDeepSleepDurationMs};
@@ -367,6 +371,7 @@ struct PowerConfig
     std::uint32_t smartSleepShortThresholdMs{kDefaultSmartSleepShortThresholdMs};
     std::uint32_t smartSleepMediumThresholdMs{kDefaultSmartSleepMediumThresholdMs};
     std::uint8_t nfcWakeupPin{kDefaultNfcWakeupPin};
+    std::uint8_t nfcWakeGatePin{kDefaultNfcWakeGatePin};
     std::uint8_t activityTypeMask{kDefaultActivityTypeMask};
     bool enableTimerWakeup{kDefaultEnableTimerWakeup};
     bool enableNfcWakeup{kDefaultEnableNfcWakeup};
@@ -390,6 +395,7 @@ struct PowerConfig
         enableTimerWakeup = kDefaultEnableTimerWakeup;
         enableNfcWakeup = kDefaultEnableNfcWakeup;
         nfcWakeupPin = kDefaultNfcWakeupPin;
+        nfcWakeGatePin = kDefaultNfcWakeGatePin;
         autoSleepEnabled = kDefaultAutoSleepEnabled;
         disableWiFiDuringSleep = kDefaultDisableWiFiDuringSleep;
         pn532SleepBetweenScans = kDefaultPn532SleepBetweenScans;

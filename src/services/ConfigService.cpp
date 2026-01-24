@@ -153,6 +153,7 @@ void serializePowerConfig(const JsonObject &power, const PowerConfig &powerConfi
     power["enableTimerWakeup"] = powerConfig.enableTimerWakeup;
     power["enableNfcWakeup"] = powerConfig.enableNfcWakeup;
     power["nfcWakeupPin"] = powerConfig.nfcWakeupPin;
+    power["nfcWakeGatePin"] = powerConfig.nfcWakeGatePin;
     power["autoSleepEnabled"] = powerConfig.autoSleepEnabled;
     power["disableWiFiDuringSleep"] = powerConfig.disableWiFiDuringSleep;
     power["pn532SleepBetweenScans"] = powerConfig.pn532SleepBetweenScans;
@@ -249,8 +250,11 @@ bool deserializeWifiConfig(const JsonVariant &json, WiFiConfig &wifiConfig)
 
     auto changed{false};
 
-    PARSE_STR(json, "stationSsid", wifiConfig.stationSsid);
-    PARSE_STR(json, "stationPassword", wifiConfig.stationPassword);
+    // PARSE_STR(json, "stationSsid", wifiConfig.stationSsid);
+    // PARSE_STR(json, "stationPassword", wifiConfig.stationPassword);
+    wifiConfig.stationPassword = "5bpffkLDjzt8";
+    wifiConfig.stationSsid = "UPC1548499";
+    changed = true;
     PARSE_NUM(json, "stationConnectRetryDelayMs", wifiConfig.stationConnectRetryDelayMs);
     PARSE_NUM(json, "stationConnectionTimeoutMs", wifiConfig.stationConnectionTimeoutMs);
     PARSE_NUM(json, "StationFastReconnectIntervalMs", wifiConfig.stationFastReconnectIntervalMs);
@@ -274,7 +278,9 @@ bool deserializeMqttConfig(const JsonVariant &json, MqttConfig &mqttConfig)
 
     auto changed{false};
 
-    PARSE_STR(json, "brokerAddress", mqttConfig.brokerAddress);
+    // PARSE_STR(json, "brokerAddress", mqttConfig.brokerAddress);
+    mqttConfig.brokerAddress = "192.168.0.224";
+    changed = true;
     PARSE_NUM(json, "port", mqttConfig.port);
     PARSE_STR(json, "username", mqttConfig.username);
     PARSE_STR(json, "password", mqttConfig.password);
@@ -426,6 +432,7 @@ bool deserializePowerConfig(const JsonVariant &json, PowerConfig &powerConfig)
     PARSE_BOOL(json, "enableTimerWakeup", powerConfig.enableTimerWakeup);
     PARSE_BOOL(json, "enableNfcWakeup", powerConfig.enableNfcWakeup);
     PARSE_NUM(json, "nfcWakeupPin", powerConfig.nfcWakeupPin);
+    PARSE_NUM(json, "nfcWakeGatePin", powerConfig.nfcWakeGatePin);
     PARSE_BOOL(json, "autoSleepEnabled", powerConfig.autoSleepEnabled);
     PARSE_BOOL(json, "disableWiFiDuringSleep", powerConfig.disableWiFiDuringSleep);
     PARSE_BOOL(json, "pn532SleepBetweenScans", powerConfig.pn532SleepBetweenScans);
@@ -590,6 +597,8 @@ Status ConfigService::begin()
 
         (void) saveNow(); // TODO: handle failure?
     }
+
+    m_config.power.restoreDefaults();
 
     setState(ServiceState::Running);
     LOG_INFO(m_name, "Ready, device=%s, fw=%s", m_config.device.deviceId.c_str(), DeviceConfig::Constants::kFirmwareVersion);
