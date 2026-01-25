@@ -1,0 +1,35 @@
+# ISIC OTA Server + MQTT Broker
+#
+# Usage:
+#   cd docker
+#   docker-compose up -d
+#
+# Upload firmware: POST http://<server-ip>:8081/upload
+# Device fetches:  GET  http://<server-ip>:8080/manifest.json
+
+services:
+  # OTA Firmware Server (serves files to devices)
+  ota-server:
+    image: nginx:alpine
+    container_name: isic-ota
+    ports:
+      - "8080:80"
+    volumes:
+      - ota-firmware:/usr/share/nginx/html:ro
+    restart: unless-stopped
+
+  # OTA Upload Server (accepts firmware uploads)
+  ota-upload:
+    build: ./ota-upload
+    container_name: isic-ota-upload
+    ports:
+      - "8081:8081"
+    environment:
+      - FIRMWARE_DIR=/firmware
+      - PORT=8081
+    volumes:
+      - ota-firmware:/firmware
+    restart: unless-stopped
+
+volumes:
+  ota-firmware:

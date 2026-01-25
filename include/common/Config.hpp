@@ -283,18 +283,15 @@ struct HealthConfig
     };
 
     static constexpr auto kDefaultEnabled{true};
-    static constexpr auto kDefaultHealthCheckIntervalMs{300'000}; // 5 minutes
-    static constexpr auto kDefaultStatusUpdateIntervalMs{60'000}; // 1 minute
+    static constexpr auto kDefaultHealthCheckIntervalMs{1'800'000}; // 30 minutes
+    static constexpr auto kDefaultStatusUpdateIntervalMs{600'000}; // 10 minutes
     static constexpr auto kDefaultMetricsPublishIntervalMs{3'600'000}; // 1 hour
     static constexpr auto kDefaultPublishToMqtt{true};
-    static constexpr auto kDefaultPublishToLog{true};
 
     std::uint32_t healthCheckIntervalMs{kDefaultHealthCheckIntervalMs};
     std::uint32_t statusUpdateIntervalMs{kDefaultStatusUpdateIntervalMs};
     std::uint32_t metricsPublishIntervalMs{kDefaultMetricsPublishIntervalMs};
-    bool enabled{kDefaultEnabled};
     bool publishToMqtt{kDefaultPublishToMqtt};
-    bool publishToLog{kDefaultPublishToLog};
 
     [[nodiscard]] constexpr bool isConfigured() const // NOLINT
     {
@@ -306,30 +303,40 @@ struct HealthConfig
         healthCheckIntervalMs = kDefaultHealthCheckIntervalMs;
         statusUpdateIntervalMs = kDefaultStatusUpdateIntervalMs;
         metricsPublishIntervalMs = kDefaultMetricsPublishIntervalMs;
-        enabled = kDefaultEnabled;
         publishToMqtt = kDefaultPublishToMqtt;
-        publishToLog = kDefaultPublishToLog;
     }
 };
 
 struct OtaConfig
 {
+    struct Constants
+    {
+        static constexpr auto kDefaultIntervalTimeDownload{100};
+        static constexpr auto kDefaultCheckStuckTimeMs{2000};
+        static constexpr auto kProgressPublishIntervalMs{500};
+    };
     static constexpr auto kDefaultEnabled{true};
+    static constexpr auto kDefaultCheckOnConnect{true};
+    static constexpr auto kDefaultTimeoutMs{30'000}; // 30 seconds
 
-    std::string updateServerUrl{};
+    std::string serverUrl{}; // e.g., "http://192.168.0.186:8080"
     std::string username{};
     std::string password{};
+    std::uint32_t timeoutMs{kDefaultTimeoutMs};
     bool enabled{kDefaultEnabled};
+    bool checkOnConnect{kDefaultCheckOnConnect};
 
-    [[nodiscard]] constexpr bool isConfigured() const // NOLINT
+    [[nodiscard]] bool isConfigured() const
     {
-        return true; // Always considered configured
+        return !serverUrl.empty();
     }
 
     void restoreDefaults()
     {
         enabled = kDefaultEnabled;
-        updateServerUrl.clear();
+        checkOnConnect = kDefaultCheckOnConnect;
+        timeoutMs = kDefaultTimeoutMs;
+        serverUrl.clear();
         username.clear();
         password.clear();
     }

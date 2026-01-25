@@ -46,16 +46,6 @@ public:
         return millis() - m_startTimeMs;
     }
 
-    [[nodiscard]] std::uint32_t getUptimeSec() const noexcept
-    {
-        return getUptimeMs() / 1000;
-    }
-
-    void serializeMetrics(JsonObject &obj) const override
-    {
-        // just do nothing
-    }
-
 private:
     void publishHealthUpdate();
     void publishMetricsUpdate();
@@ -77,6 +67,9 @@ private:
     std::uint32_t m_lastHealthCheckMs{0};
     std::uint32_t m_lastHealthPublishMs{0};
     std::uint32_t m_lastMetricsPublishMs{0};
+    bool m_mqttConnected{false};
+    bool m_pendingHealthPublish{false};
+    bool m_pendingMetricsPublish{false};
 
     // Event subscriptions
     std::vector<EventBus::ScopedConnection> m_eventConnections{};

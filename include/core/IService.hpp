@@ -87,6 +87,11 @@ public:
         return m_state;
     }
 
+    void serializeMetrics(JsonObject &obj) const override
+    {
+        obj["service_state"] = toString(m_state);
+    }
+
 protected:
     explicit ServiceBase(const char *name)
         : m_name(name)

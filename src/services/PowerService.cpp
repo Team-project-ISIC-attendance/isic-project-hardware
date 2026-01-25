@@ -648,36 +648,33 @@ WakeupReason PowerService::detectWakeupReason()
 
 void PowerService::publishStateChange(const PowerState newState, const PowerState oldState)
 {
-    Event event(EventType::PowerStateChange, PowerEvent{
-                                                     .durationMs = 0,
-                                                     .targetState = newState,
-                                                     .previousState = oldState,
-                                             });
-    event.timestampMs = millis();
-    m_bus.publish(event);
+    m_bus.publish({EventType::PowerStateChange,
+                   PowerEvent{
+                           .durationMs = 0,
+                           .targetState = newState,
+                           .previousState = oldState,
+                   }});
 }
 
 void PowerService::publishSleepRequested(const PowerState state, const std::uint32_t durationMs)
 {
-    Event event(EventType::SleepRequested, PowerEvent{
-                                                   .durationMs = durationMs,
-                                                   .targetState = state,
-                                                   .previousState = m_currentState,
-                                           });
-    event.timestampMs = millis();
-    m_bus.publish(event);
+    m_bus.publish({EventType::SleepRequested,
+                   PowerEvent{
+                           .durationMs = durationMs,
+                           .targetState = state,
+                           .previousState = m_currentState,
+                   }});
 }
 
 void PowerService::publishWakeupOccurred(const WakeupReason reason)
 {
-    Event event(EventType::WakeupOccurred, PowerEvent{
-                                                   .durationMs = 0,
-                                                   .targetState = PowerState::Active,
-                                                   .previousState = m_currentState,
-                                                   .wakeupReason = reason,
-                                           });
-    event.timestampMs = millis();
-    m_bus.publish(event);
+    m_bus.publish({EventType::WakeupOccurred,
+                   PowerEvent{
+                           .durationMs = 0,
+                           .targetState = PowerState::Active,
+                           .previousState = m_currentState,
+                           .wakeupReason = reason,
+                   }});
 }
 
 void PowerService::recordActivityInternal(const ActivityType type)

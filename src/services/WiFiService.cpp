@@ -558,7 +558,7 @@ void WiFiService::onConnected()
 
     // Service is now fully operational - transition to Running
     setState(ServiceState::Running);
-    LOG_INFO(m_name, "WiFi connected - service now Running, IP: %s, RSSI: %d", WiFi.localIP().toString().c_str(), m_metrics.rssi);
+    LOG_INFO(m_name, "WiFi connected - service now Running, IP: %s, RSSI: %d", WiFi.localIP().toString().c_str(), WiFi.RSSI());
 
     // Stop AP mode if it was running
     if (m_apActive)
@@ -612,6 +612,7 @@ void WiFiService::handleScanNetworks(AsyncWebServerRequest *request)
     WiFi.scanNetworks(true); // Start new scan for next request
 
     String json;
+    json.reserve(measureJson(doc) + 1);
     serializeJson(doc, json);
     request->send(200, "application/json", json);
 }
@@ -695,6 +696,7 @@ void WiFiService::handleStatus(AsyncWebServerRequest *request)
     }
 
     String json;
+    json.reserve(measureJson(doc) + 1);
     serializeJson(doc, json);
     request->send(200, "application/json", json);
 }

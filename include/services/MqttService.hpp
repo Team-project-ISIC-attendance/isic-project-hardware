@@ -91,7 +91,7 @@ private:
 
     std::vector<EventBus::ScopedConnection> m_eventConnections{};
 
-    static MqttService *s_instance;
+    static inline MqttService *s_instance{nullptr};
 };
 } // namespace isic
 

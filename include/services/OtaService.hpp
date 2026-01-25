@@ -5,16 +5,24 @@
 #include "core/IService.hpp"
 #include "common/Config.hpp"
 
-#include <ESPAsyncWebServer.h>
-#include <ElegantOTA.h>
+#include <array>
 #include <vector>
+
+#ifdef ISIC_PLATFORM_ESP8266
+#include <ESP8266HTTPClient.h>
+#elif defined(ISIC_PLATFORM_ESP32)
+#include <HTTPClient.h>
+#endif
+#include <WiFiClient.h>
+class Stream;
 
 namespace isic
 {
+
 class OtaService : public ServiceBase
 {
 public:
-    OtaService(EventBus &bus, const OtaConfig &config, AsyncWebServer &webServer);
+    OtaService(EventBus &bus, const OtaConfig &config);
     ~OtaService() override = default;
 
     OtaService(const OtaService &) = delete;
@@ -22,43 +30,54 @@ public:
     OtaService(OtaService &&) = delete;
     OtaService &operator=(OtaService &&) = delete;
 
-    // IService implementation
     Status begin() override;
     void loop() override;
     void end() override;
 
-    [[nodiscard]] OtaState getOtaState() const
-    {
-        return m_otaState;
-    }
-    [[nodiscard]] bool isUpdating() const
-    {
-        return m_otaState == OtaState::Downloading;
-    }
-    [[nodiscard]] std::uint8_t getProgress() const
-    {
-        return m_progress;
-    }
+    void checkForUpdate();
+
+    [[nodiscard]] OtaState getOtaState() const { return m_otaState; }
+    [[nodiscard]] bool isUpdating() const { return m_otaState == OtaState::Downloading; }
+    [[nodiscard]] std::uint8_t getProgress() const { return m_progress; }
 
     void serializeMetrics(JsonObject &obj) const override
     {
         obj["state"] = toString(getState());
+        obj["otaState"] = static_cast<int>(m_otaState);
+        obj["progress"] = m_progress;
+        obj["serverConfigured"] = m_config.isConfigured();
     }
 
 private:
-    void onOtaStart();
-    void onOtaEnd(bool success);
-    void onOtaProgress(std::size_t current, std::size_t total);
+    bool fetchManifest(std::string &outVersion, std::string &outMd5, std::uint32_t &outSize);
+    bool isNewerVersion(const std::string &serverVersion) const;
+    bool beginDownload(const std::string &expectedMd5, std::uint32_t expectedSize);
+    void processDownload();
+    void completeDownload();
+    void failDownload(const char *reason);
+    void cleanupDownload();
 
     EventBus &m_bus;
     const OtaConfig &m_config;
-    AsyncWebServer &m_webServer;  // Reference to shared web server
 
     OtaState m_otaState{OtaState::Idle};
     std::uint8_t m_progress{0};
+    bool m_pendingCheck{false};
+
+    HTTPClient m_updateHttp;
+    WiFiClient m_updateClient;
+    Stream *m_updateStream{nullptr};
+    std::string m_updateMd5{};
+    std::uint32_t m_updateTotalSize{0};
+    std::uint32_t m_updateDownloaded{0};
+    std::uint32_t m_lastDownloadActivityMs{0};
+    std::uint32_t m_lastProgressPublishMs{0};
+    bool m_downloadActive{false};
+    std::array<std::uint8_t, 1024> m_downloadBuffer{};
 
     std::vector<EventBus::ScopedConnection> m_eventConnections;
 };
+
 } // namespace isic
 
 #endif // ISIC_SERVICES_OTASERVICE_HPP
