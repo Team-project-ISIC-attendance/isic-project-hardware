@@ -309,22 +309,34 @@ struct HealthConfig
 
 struct OtaConfig
 {
+    struct Constants
+    {
+        static constexpr auto kDefaultIntervalTimeDownload{100};
+        static constexpr auto kDefaultCheckStuckTimeMs{2000};
+        static constexpr auto kProgressPublishIntervalMs{500};
+    };
     static constexpr auto kDefaultEnabled{true};
+    static constexpr auto kDefaultCheckOnConnect{true};
+    static constexpr auto kDefaultTimeoutMs{30'000}; // 30 seconds
 
-    std::string updateServerUrl{};
+    std::string serverUrl{}; // e.g., "http://192.168.0.186:8080"
     std::string username{};
     std::string password{};
+    std::uint32_t timeoutMs{kDefaultTimeoutMs};
     bool enabled{kDefaultEnabled};
+    bool checkOnConnect{kDefaultCheckOnConnect};
 
-    [[nodiscard]] constexpr bool isConfigured() const // NOLINT
+    [[nodiscard]] bool isConfigured() const
     {
-        return true; // Always considered configured
+        return !serverUrl.empty();
     }
 
     void restoreDefaults()
     {
         enabled = kDefaultEnabled;
-        updateServerUrl.clear();
+        checkOnConnect = kDefaultCheckOnConnect;
+        timeoutMs = kDefaultTimeoutMs;
+        serverUrl.clear();
         username.clear();
         password.clear();
     }

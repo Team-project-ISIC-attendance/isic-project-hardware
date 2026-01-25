@@ -210,11 +210,28 @@ void HealthService::updateSystemHealth()
         m_systemHealth.wifiState = HealthState::Unknown;
     }
 
-    if (!isStateHealthy(m_systemHealth.heapState) || !isStateHealthy(m_systemHealth.fragmentationState) || !isStateHealthy(m_systemHealth.wifiState))
+    // Only log and publish if health state changed from last check
+    const bool isCurrentlyUnhealthy = !isStateHealthy(m_systemHealth.heapState) || 
+                                       !isStateHealthy(m_systemHealth.fragmentationState) || 
+                                       !isStateHealthy(m_systemHealth.wifiState);
+    
+    static bool wasUnhealthy = false;
+    
+    if (isCurrentlyUnhealthy && !wasUnhealthy)
     {
-        LOG_WARN(m_name, "System health degraded: heap=%s, frag=%s, wifi=%s", toString(m_systemHealth.heapState), toString(m_systemHealth.fragmentationState), toString(m_systemHealth.wifiState));
-        publishHealthUpdate();
+        LOG_WARN(m_name, "System health degraded: heap=%s, frag=%s, wifi=%s", 
+                 toString(m_systemHealth.heapState), 
+                 toString(m_systemHealth.fragmentationState), 
+                 toString(m_systemHealth.wifiState));
+        m_pendingHealthPublish = true;
     }
+    else if (!isCurrentlyUnhealthy && wasUnhealthy)
+    {
+        LOG_INFO(m_name, "System health recovered");
+        m_pendingHealthPublish = true;
+    }
+    
+    wasUnhealthy = isCurrentlyUnhealthy;
 }
 
 void HealthService::publishHealthUpdate()

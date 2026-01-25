@@ -416,10 +416,10 @@ private:
     }
 
     /// Ring buffer capacity - tuned for ESP8266 memory constraints
-    static constexpr std::size_t kMaxPendingEvents{4};
+    static constexpr std::size_t kMaxPendingEvents{8};
 
     /// Initial slot vector capacity to avoid early reallocations
-    static constexpr std::size_t kInitialSlotCapacity{4};
+    static constexpr std::size_t kInitialSlotCapacity{8};
 
     mutable Mutex m_mutex;
     std::vector<Slot> m_slots;

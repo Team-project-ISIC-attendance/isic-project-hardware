@@ -203,3 +203,121 @@ python esp_fs_inspector.py --port /dev/cu.usbserial-0001 monitor /logs/system.lo
 # Or check recent entries
 python esp_fs_inspector.py --port /dev/cu.usbserial-0001 tail /logs/error.log --lines 50
 ```
+
+---
+
+# OTA Firmware Server
+
+A Docker-based OTA (Over-The-Air) update server for delivering firmware updates to devices over HTTP.
+
+This setup provides:
+- Firmware file hosting for devices  
+- HTTP API for uploading new firmware versions  
+- Shared storage between upload service and firmware server
+
+---
+
+## Architecture
+
+The OTA system runs two services:
+
+| Service | Purpose |
+|---------|---------|
+| **ota-server** | Serves firmware files and `manifest.json` to devices |
+| **ota-upload** | Accepts firmware uploads via HTTP API |
+
+Both services use a shared Docker volume where firmware files are stored. Once uploaded, firmware becomes immediately available to devices.
+
+---
+
+## Requirements
+
+- Docker  
+- Docker Compose  
+
+Verify installation:
+```bash
+docker --version
+docker compose version
+```
+
+---
+
+## Running the OTA Server
+
+Go to the directory containing `docker-compose.yml` and start the services:
+
+```bash
+docker compose up -d
+```
+
+This will start:
+
+| Service | Port | Description |
+|--------|------|-------------|
+| OTA Server | **8080** | Devices download firmware and manifest |
+| OTA Upload API | **8081** | Upload new firmware files |
+
+Devices retrieve update information from:
+
+```
+GET http://<server-ip>:8080/manifest.json
+```
+
+---
+
+## Uploading Firmware
+
+Upload a new firmware binary using:
+
+```bash
+curl -X POST http://localhost:8081/upload \
+  -F "file=@firmware.bin"
+```
+
+After upload:
+- The file is stored in the shared firmware volume  
+- The OTA server can immediately serve it to devices  
+- No container restart is required
+
+---
+
+## Firmware Storage
+
+Firmware files are stored in the Docker volume:
+
+```
+ota-firmware
+```
+
+Used by:
+- **ota-upload** — writes firmware files  
+- **ota-server (nginx)** — serves them over HTTP
+
+---
+
+## Verifying Operation
+
+Check running containers:
+```bash
+docker ps
+```
+
+Check OTA server:
+```bash
+curl http://localhost:8080/
+```
+
+Check upload endpoint:
+```bash
+curl http://localhost:8081/upload
+```
+
+---
+
+## Stopping the Server
+
+```bash
+docker compose down
+```
+

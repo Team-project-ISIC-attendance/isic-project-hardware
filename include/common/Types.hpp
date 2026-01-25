@@ -78,6 +78,7 @@ enum class Pn532State : std::uint8_t
 enum class OtaState : std::uint8_t
 {
     Idle,
+    Checking,
     Downloading,
     Completed,
     Error,
@@ -128,7 +129,6 @@ enum class EventType : std::uint8_t
     // WiFi
     WifiConnected,
     WifiDisconnected,
-    WifiError,
     WifiApStarted,
     WifiApStopped,
     WifiApError,
@@ -200,7 +200,7 @@ inline constexpr const char *kMqttStateNames[]{"disconnected", "connecting", "co
 
 inline constexpr const char *kPn532StateNames[]{"uninitialized", "ready", "reading", "error", "offline", "disabled"};
 
-inline constexpr const char *kOtaStateNames[]{"idle", "downloading", "completed", "error"};
+inline constexpr const char *kOtaStateNames[]{"idle", "checking", "downloading", "completed", "error"};
 
 inline constexpr const char *kPowerStateNames[]{"active", "light_sleep", "modem_sleep", "deep_sleep", "hibernating"};
 

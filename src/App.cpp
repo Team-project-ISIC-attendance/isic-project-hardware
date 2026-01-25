@@ -13,7 +13,7 @@ App::App()
     , m_configService(m_eventBus)
     , m_wifiService(m_eventBus, m_configService, m_webServer)
     , m_mqttService(m_eventBus, m_configService.get().mqtt, m_configService.get().device)
-    , m_otaService(m_eventBus, m_configService.get().ota, m_webServer)
+    , m_otaService(m_eventBus, m_configService.get().ota)
     , m_pn532Service(m_eventBus, m_configService)
     , m_attendanceService(m_eventBus, m_configService.getMutable().attendance)
     , m_feedbackService(m_eventBus, m_configService.getMutable().feedback)
@@ -242,10 +242,7 @@ void App::setupScheduler()
 void App::startWebServer()
 {
     // Start the shared web server after all services have registered their routes
-    // This ensures:
-    // 1. OTA routes (/update) are registered
-    // 2. WiFi routes (/, /scan, /save, /status) are registered if in AP mode
-    // 3. Any future service routes are also registered
+    // WiFi routes (/, /scan, /save, /status) are registered if in AP mode
 
     m_webServer.begin();
     LOG_INFO(TAG, "Web server started on port 80");
@@ -255,7 +252,5 @@ void App::startWebServer()
     LOG_INFO(TAG, "  - /scan (WiFi network scan)");
     LOG_INFO(TAG, "  - /save (Save configuration)");
     LOG_INFO(TAG, "  - /status (WiFi status)");
-
-    LOG_INFO(TAG, "  - /update (OTA firmware update - ACTIVE)");
 }
 } // namespace isic

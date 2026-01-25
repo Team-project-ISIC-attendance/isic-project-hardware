@@ -139,9 +139,11 @@ void serializeHealthConfig(const JsonObject &health, const HealthConfig &healthC
 void serializeOtaConfig(const JsonObject &ota, const OtaConfig &otaConfig)
 {
     ota["enabled"] = otaConfig.enabled;
-    ota["updateServerUrl"] = otaConfig.updateServerUrl;
+    ota["serverUrl"] = otaConfig.serverUrl;
     ota["username"] = otaConfig.username;
     ota["password"] = otaConfig.password;
+    ota["timeoutMs"] = otaConfig.timeoutMs;
+    ota["checkOnConnect"] = otaConfig.checkOnConnect;
 }
 
 void serializePowerConfig(const JsonObject &power, const PowerConfig &powerConfig)
@@ -320,7 +322,6 @@ bool deserializePn532Config(const JsonVariant &json, Pn532Config &pn532Config)
     PARSE_NUM(json, "maxConsecutiveErrors", pn532Config.maxConsecutiveErrors);
     PARSE_NUM(json, "recoveryDelayMs", pn532Config.recoveryDelayMs);
 
-    pn532Config.restoreDefaults();
     return changed;
 }
 
@@ -402,9 +403,11 @@ bool deserializeOtaConfig(const JsonVariant &json, OtaConfig &otaConfig)
     auto changed{false};
 
     PARSE_BOOL(json, "enabled", otaConfig.enabled);
-    PARSE_STR(json, "updateServerUrl", otaConfig.updateServerUrl);
+    PARSE_STR(json, "serverUrl", otaConfig.serverUrl);
     PARSE_STR(json, "username", otaConfig.username);
     PARSE_STR(json, "password", otaConfig.password);
+    PARSE_NUM(json, "timeoutMs", otaConfig.timeoutMs);
+    PARSE_BOOL(json, "checkOnConnect", otaConfig.checkOnConnect);
 
     return changed;
 }
