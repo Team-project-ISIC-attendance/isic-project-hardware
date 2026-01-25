@@ -19,7 +19,7 @@ Pn532Service::Pn532Service(EventBus &bus, ConfigService &configService)
 {
     m_eventConnections.reserve(1);
 
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::PowerStateChange, [this](const Event &e) {
+    m_eventConnections.push_back(m_bus.subscribeScopedAny(EventType::PowerStateChange, [this](const Event &e) {
         if (const auto *power = e.get<PowerEvent>())
         {
             handlePowerStateChange(*power);

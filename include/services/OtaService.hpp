@@ -57,7 +57,7 @@ private:
     OtaState m_otaState{OtaState::Idle};
     std::uint8_t m_progress{0};
 
-    std::vector<EventBus::ScopedConnection> m_eventConnections;
+    std::vector<EventBus::Subscription> m_eventConnections;
 };
 } // namespace isic
 

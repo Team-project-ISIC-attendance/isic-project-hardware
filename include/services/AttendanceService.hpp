@@ -102,7 +102,7 @@ private:
     std::uint8_t m_debounceCacheIndex{0};
 
     // Event subscriptions
-    std::vector<EventBus::ScopedConnection> m_eventConnections{};
+    std::vector<EventBus::Subscription> m_eventConnections{};
 };
 } // namespace isic
 

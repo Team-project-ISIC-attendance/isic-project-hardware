@@ -99,7 +99,7 @@ private:
 
     WiFiMetrics m_metrics{};
 
-    std::vector<EventBus::ScopedConnection> m_eventConnections;
+    std::vector<EventBus::Subscription> m_eventConnections;
 };
 } // namespace isic
 

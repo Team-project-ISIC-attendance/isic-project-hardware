@@ -117,27 +117,18 @@ enum class EventType : std::uint8_t
 {
     None,
 
-    // System
-    SystemReady,
-    SystemError,
-
     // Config
     ConfigChanged,
-    ConfigError,
 
     // WiFi
     WifiConnected,
     WifiDisconnected,
-    WifiError,
     WifiApStarted,
     WifiApStopped,
-    WifiApError,
-    WifiApClientConnected,
 
     // MQTT
     MqttConnected,
     MqttDisconnected,
-    MqttError,
     MqttMessage,
     MqttPublishRequest,
     MqttSubscribeRequest,
@@ -145,24 +136,9 @@ enum class EventType : std::uint8_t
     // NFC
     NfcReady,
     CardScanned,
-    CardRemoved,
-    NfcError,
 
     // Attendance
     AttendanceRecorded,
-    AttendanceError,
-
-    // OTA
-    OtaStarted,
-    OtaProgress,
-    OtaCompleted,
-    OtaError,
-
-    // Feedback
-    FeedbackRequest,
-
-    // Health
-    HealthChanged,
 
     // Power
     PowerStateChange,
@@ -208,7 +184,7 @@ inline constexpr const char *kWakeupReasonNames[]{"power_on", "timer", "external
 
 inline constexpr const char *kFeedbackSignalNames[]{"none", "success", "error", "processing", "connected", "disconnected", "ota_start", "ota_complete"};
 
-inline constexpr const char *kEventTypeNames[]{"none", "system_ready", "system_error", "config_changed", "config_error", "wifi_connected", "wifi_disconnected", "wifi_error", "wifi_ap_started", "wifi_ap_stopped", "wifi_ap_error", "wifi_ap_client", "mqtt_connected", "mqtt_disconnected", "mqtt_error", "mqtt_message", "mqtt_publish_req", "mqtt_subscribe_req", "nfc_ready", "card_scanned", "card_removed", "nfc_error", "attendance_recorded", "attendance_error", "ota_started", "ota_progress", "ota_completed", "ota_error", "feedback_request", "health_changed", "power_state_change", "sleep_requested", "wakeup_occurred"};
+inline constexpr const char *kEventTypeNames[]{"none", "config_changed", "wifi_connected", "wifi_disconnected", "wifi_ap_started", "wifi_ap_stopped", "mqtt_connected", "mqtt_disconnected", "mqtt_message", "mqtt_publish_req", "mqtt_subscribe_req", "nfc_ready", "card_scanned", "attendance_recorded", "power_state_change", "sleep_requested", "wakeup_occurred"};
 
 inline constexpr const char *kStatusCodeNames[]{"ok", "error", "timeout", "not_ready", "invalid_arg", "no_memory", "not_found", "busy"};
 

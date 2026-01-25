@@ -13,25 +13,25 @@ PowerService::PowerService(EventBus &bus, const PowerConfig &config)
     , m_config(config)
 {
     eventConnections_.reserve(7);
-    eventConnections_.push_back(m_bus.subscribeScoped(EventType::WifiConnected, [this](const Event &e) {
+    eventConnections_.push_back(m_bus.subscribeScopedAny(EventType::WifiConnected, [this](const Event &e) {
         handleWifiConnected(e);
     }));
-    eventConnections_.push_back(m_bus.subscribeScoped(EventType::WifiDisconnected, [this](const Event &e) {
+    eventConnections_.push_back(m_bus.subscribeScopedAny(EventType::WifiDisconnected, [this](const Event &e) {
         handleWifiDisconnected(e);
     }));
-    eventConnections_.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &e) {
+    eventConnections_.push_back(m_bus.subscribeScopedAny(EventType::MqttConnected, [this](const Event &e) {
         handleMqttConnected(e);
     }));
-    eventConnections_.push_back(m_bus.subscribeScoped(EventType::MqttDisconnected, [this](const Event &e) {
+    eventConnections_.push_back(m_bus.subscribeScopedAny(EventType::MqttDisconnected, [this](const Event &e) {
         handleMqttDisconnected(e);
     }));
-    eventConnections_.push_back(m_bus.subscribeScoped(EventType::CardScanned, [this](const Event &e) {
+    eventConnections_.push_back(m_bus.subscribeScopedAny(EventType::CardScanned, [this](const Event &e) {
         handleCardScanned(e);
     }));
-    eventConnections_.push_back(m_bus.subscribeScoped(EventType::MqttMessage, [this](const Event &e) {
+    eventConnections_.push_back(m_bus.subscribeScopedAny(EventType::MqttMessage, [this](const Event &e) {
         handleMqttMessage(e);
     }));
-    eventConnections_.push_back(m_bus.subscribeScoped(EventType::NfcReady, [this](const Event &e) {
+    eventConnections_.push_back(m_bus.subscribeExclusiveScopedAny(EventType::NfcReady, [this](Event e) {
         handleNfcReady(e);
     }));
 }

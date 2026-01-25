@@ -537,11 +537,11 @@ ConfigService::ConfigService(EventBus &bus)
 {
 
     m_eventConnections.reserve(2);
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
+    m_eventConnections.push_back(m_bus.subscribeScopedAny(EventType::MqttConnected, [this](const Event &) {
         m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = kConfigSetTopic}});
         m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = kConfigGetTopic}});
     }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttMessage, [this](const Event &event) {
+    m_eventConnections.push_back(m_bus.subscribeScopedAny(EventType::MqttMessage, [this](const Event &event) {
         if (const auto *mqtt = event.get<MqttEvent>())
         {
             if (mqtt->topic.find(kConfigSetTopicSuffix) != std::string::npos)

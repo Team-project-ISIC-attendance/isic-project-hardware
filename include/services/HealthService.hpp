@@ -72,7 +72,7 @@ private:
     bool m_pendingMetricsPublish{false};
 
     // Event subscriptions
-    std::vector<EventBus::ScopedConnection> m_eventConnections{};
+    std::vector<EventBus::Subscription> m_eventConnections{};
 };
 } // namespace isic
 

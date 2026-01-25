@@ -65,6 +65,7 @@ public:
     void reconnect();
 
 private:
+    const char *buildTopicBuffer(const char *suffix);
     void connect();
     void handleMessage(const char *topic, std::uint8_t *payload, unsigned int length);
     void rebuildTopicPrefix();
@@ -81,6 +82,7 @@ private:
     PubSubClient m_mqttClient;
 
     std::string m_topicPrefix{};
+    std::string m_topicBuffer{};
 
     MqttState m_mqttState{MqttState::Disconnected};
     MqttMetrics m_metrics{};
@@ -89,7 +91,7 @@ private:
     std::uint32_t m_lastConnectAttemptMs{0};
     std::uint32_t m_consecutiveFailures{0};
 
-    std::vector<EventBus::ScopedConnection> m_eventConnections{};
+    std::vector<EventBus::Subscription> m_eventConnections{};
 
     static inline MqttService *s_instance{nullptr};
 };

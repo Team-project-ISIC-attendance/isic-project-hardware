@@ -90,7 +90,7 @@ FeedbackService::FeedbackService(EventBus &bus, FeedbackConfig &config)
     m_eventConnections.reserve(1); // Known subscription count
 
     m_eventConnections.push_back(
-            m_bus.subscribeScoped(EventType::AttendanceRecorded, [this](const Event &) {
+            m_bus.subscribeExclusiveScopedAny(EventType::AttendanceRecorded, [this](Event) {
                 signalSuccess();
             }));
 }

@@ -32,7 +32,7 @@ HealthService::HealthService(EventBus &bus, HealthConfig &config)
     m_eventConnections.reserve(3);
 
     // MQTT connected - subscribe to health/request topic and publish status
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
+    m_eventConnections.push_back(m_bus.subscribeScopedAny(EventType::MqttConnected, [this](const Event &) {
         m_mqttConnected = true;
 
         m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = kHealthRequestTopic, .payload = "", .retain = false}});
@@ -44,12 +44,12 @@ HealthService::HealthService(EventBus &bus, HealthConfig &config)
             m_pendingHealthPublish = true;
         }
     }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttDisconnected, [this](const Event &) {
+    m_eventConnections.push_back(m_bus.subscribeScopedAny(EventType::MqttDisconnected, [this](const Event &) {
         m_mqttConnected = false;
     }));
 
     // Handle incoming status requests via MQTT
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttMessage, [this](const Event &e) {
+    m_eventConnections.push_back(m_bus.subscribeScopedAny(EventType::MqttMessage, [this](const Event &e) {
         if (const auto *mqtt = e.get<MqttEvent>())
         {
             if (mqtt->topic.find(kHealthRequestTopic) != std::string::npos)

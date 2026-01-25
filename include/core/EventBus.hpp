@@ -15,6 +15,7 @@
 
 #include <array>
 #include <utility>
+#include <variant>
 
 namespace isic
 {
@@ -73,6 +74,34 @@ public:
     using ScopedConnection = SignalType::ScopedConnection;
     using Callback = SignalType::Callback;
 
+    using ExclusiveSignalType = Signal<Event>;
+    using ExclusiveConnection = ExclusiveSignalType::Connection;
+    using ExclusiveScopedConnection = ExclusiveSignalType::ScopedConnection;
+    using ExclusiveCallback = ExclusiveSignalType::Callback;
+
+    class Subscription
+    {
+    public:
+        Subscription() = default;
+        explicit Subscription(ScopedConnection connection)
+            : m_connection(std::move(connection))
+        {
+        }
+        explicit Subscription(ExclusiveScopedConnection connection)
+            : m_connection(std::move(connection))
+        {
+        }
+
+        Subscription(Subscription &&) noexcept = default;
+        Subscription &operator=(Subscription &&) noexcept = default;
+
+        Subscription(const Subscription &) = delete;
+        Subscription &operator=(const Subscription &) = delete;
+
+    private:
+        std::variant<std::monostate, ScopedConnection, ExclusiveScopedConnection> m_connection{};
+    };
+
     EventBus() = default;
     ~EventBus() = default;
 
@@ -101,6 +130,11 @@ public:
         {
             return 0;
         }
+        if (!m_exclusiveSignals[static_cast<std::size_t>(type)].empty())
+        {
+            assert(false && "subscribe() called for EventType with exclusive subscriber");
+            return 0;
+        }
         return m_signals[static_cast<std::size_t>(type)].connect(std::move(callback));
     }
 
@@ -124,7 +158,69 @@ public:
         {
             return {};
         }
+        if (!m_exclusiveSignals[static_cast<std::size_t>(type)].empty())
+        {
+            assert(false && "subscribeScoped() called for EventType with exclusive subscriber");
+            return {};
+        }
         return m_signals[static_cast<std::size_t>(type)].connectScoped(std::move(callback));
+    }
+
+    [[nodiscard]] Subscription subscribeScopedAny(const EventType type, Callback &&callback)
+    {
+        return Subscription{subscribeScoped(type, std::move(callback))};
+    }
+
+    /**
+     * @brief Register a single-subscriber callback with move delivery
+     *
+     * Only one exclusive subscriber is allowed per event type. If a normal
+     * subscriber already exists, this returns 0. Events for this type will
+     * be delivered by move into the callback during dispatch().
+     *
+     * @note Use when you want to move large payloads without copying.
+     */
+    [[nodiscard]] ExclusiveConnection subscribeExclusive(const EventType type, ExclusiveCallback &&callback)
+    {
+        if (type >= EventType::_Count)
+        {
+            return 0;
+        }
+        if (!m_exclusiveSignals[static_cast<std::size_t>(type)].empty())
+        {
+            assert(false && "subscribeExclusive() called when exclusive subscriber already exists");
+            return 0;
+        }
+        if (!m_signals[static_cast<std::size_t>(type)].empty())
+        {
+            assert(false && "subscribeExclusive() called when normal subscribers already exist");
+            return 0;
+        }
+        return m_exclusiveSignals[static_cast<std::size_t>(type)].connect(std::move(callback));
+    }
+
+    [[nodiscard]] ExclusiveScopedConnection subscribeExclusiveScoped(const EventType type, ExclusiveCallback &&callback)
+    {
+        if (type >= EventType::_Count)
+        {
+            return {};
+        }
+        if (!m_exclusiveSignals[static_cast<std::size_t>(type)].empty())
+        {
+            assert(false && "subscribeExclusiveScoped() called when exclusive subscriber already exists");
+            return {};
+        }
+        if (!m_signals[static_cast<std::size_t>(type)].empty())
+        {
+            assert(false && "subscribeExclusiveScoped() called when normal subscribers already exist");
+            return {};
+        }
+        return m_exclusiveSignals[static_cast<std::size_t>(type)].connectScoped(std::move(callback));
+    }
+
+    [[nodiscard]] Subscription subscribeExclusiveScopedAny(const EventType type, ExclusiveCallback &&callback)
+    {
+        return Subscription{subscribeExclusiveScoped(type, std::move(callback))};
     }
 
     /**
@@ -144,6 +240,15 @@ public:
             return;
         }
         m_signals[static_cast<std::size_t>(type)].disconnect(connection);
+    }
+
+    void unsubscribeExclusive(const EventType type, const ExclusiveConnection connection)
+    {
+        if (type >= EventType::_Count)
+        {
+            return;
+        }
+        m_exclusiveSignals[static_cast<std::size_t>(type)].disconnect(connection);
     }
 
     /**
@@ -168,7 +273,13 @@ public:
         {
             return false;
         }
-        return m_signals[static_cast<std::size_t>(event.type)].publish(std::move(event));
+        const auto idx = static_cast<std::size_t>(event.type);
+        assert(m_exclusiveSignals[idx].empty() || m_signals[idx].empty());
+        if (!m_exclusiveSignals[idx].empty())
+        {
+            return m_exclusiveSignals[idx].publish(std::move(event));
+        }
+        return m_signals[idx].publish(std::move(event));
     }
 
     /**
@@ -210,9 +321,16 @@ public:
     std::size_t dispatch()
     {
         std::size_t totalDispatched{0};
-        for (auto &signal: m_signals)
+        for (std::size_t i = 0; i < m_signals.size(); ++i)
         {
-            totalDispatched += signal.dispatch();
+            if (!m_exclusiveSignals[i].empty())
+            {
+                totalDispatched += m_exclusiveSignals[i].dispatchMoveSingle();
+            }
+            else
+            {
+                totalDispatched += m_signals[i].dispatch();
+            }
         }
         return totalDispatched;
     }
@@ -232,11 +350,65 @@ public:
         {
             total += signal.pendingCount();
         }
+        for (const auto &signal: m_exclusiveSignals)
+        {
+            total += signal.pendingCount();
+        }
         return total;
+    }
+
+    /**
+     * @brief Total dropped events across all signals (overflow)
+     */
+    [[nodiscard]] std::size_t droppedCount() const
+    {
+        std::size_t total{0};
+        for (const auto &signal: m_signals)
+        {
+            total += signal.droppedCount();
+        }
+        for (const auto &signal: m_exclusiveSignals)
+        {
+            total += signal.droppedCount();
+        }
+        return total;
+    }
+
+    /**
+     * @brief Sum of per-signal max pending counts (coarse peak indicator)
+     */
+    [[nodiscard]] std::size_t maxPendingCount() const
+    {
+        std::size_t total{0};
+        for (const auto &signal: m_signals)
+        {
+            total += signal.maxPendingCount();
+        }
+        for (const auto &signal: m_exclusiveSignals)
+        {
+            total += signal.maxPendingCount();
+        }
+        return total;
+    }
+
+    /**
+     * @brief Reset drop/max stats on all signals
+     */
+    void resetStats()
+    {
+        for (auto &signal: m_signals)
+        {
+            signal.resetStats();
+        }
+        for (auto &signal: m_exclusiveSignals)
+        {
+            signal.resetStats();
+        }
     }
 
 private:
     std::array<SignalType, static_cast<std::size_t>(EventType::_Count)> m_signals;
+    std::array<ExclusiveSignalType, static_cast<std::size_t>(EventType::_Count)> m_exclusiveSignals;
 };
 } // namespace isic
 

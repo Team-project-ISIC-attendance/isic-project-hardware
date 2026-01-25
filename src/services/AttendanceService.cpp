@@ -49,21 +49,21 @@ AttendanceService::AttendanceService(EventBus &bus, const AttendanceConfig &conf
     m_offlineBatch.reserve(m_config.offlineBufferSize);
 
     m_eventConnections.reserve(4);
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::CardScanned, [this](const Event &e) {
+    m_eventConnections.push_back(m_bus.subscribeScopedAny(EventType::CardScanned, [this](const Event &e) {
         if (const auto *card = e.get<CardEvent>())
         {
             processCard(*card);
         }
     }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event & /*e*/) {
+    m_eventConnections.push_back(m_bus.subscribeScopedAny(EventType::MqttConnected, [this](const Event & /*e*/) {
         m_useOfflineMode = false;
         flushOfflineBatch();
     }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttDisconnected, [this](const Event & /*e*/) {
+    m_eventConnections.push_back(m_bus.subscribeScopedAny(EventType::MqttDisconnected, [this](const Event & /*e*/) {
         m_useOfflineMode = true;
     }));
 
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event /*e*/) {
+    m_eventConnections.push_back(m_bus.subscribeExclusiveScopedAny(EventType::ConfigChanged, [this](Event /*e*/) {
         // Reload config on changes
         LOG_INFO(m_name, "Config changed, reloading...");
         // In this simplified example, we assume m_config is updated externally

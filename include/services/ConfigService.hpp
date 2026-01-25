@@ -114,7 +114,7 @@ private:
     Config m_config{};
 
     // Event connections
-    std::vector<EventBus::ScopedConnection> m_eventConnections{};
+    std::vector<EventBus::Subscription> m_eventConnections{};
 
     // Dirty flag to indicate unsaved changes
     bool m_dirty{false};

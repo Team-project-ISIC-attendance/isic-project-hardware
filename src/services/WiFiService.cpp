@@ -254,7 +254,7 @@ WiFiService::WiFiService(EventBus &bus, ConfigService &config, AsyncWebServer &w
     , m_hasEverConnected(m_config.stationHasEverConnected)
 {
     m_eventConnections.reserve(2);
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::PowerStateChange, [this](const Event &e) {
+    m_eventConnections.push_back(m_bus.subscribeScopedAny(EventType::PowerStateChange, [this](const Event &e) {
         handlePowerStateChange(e);
     }));
 }

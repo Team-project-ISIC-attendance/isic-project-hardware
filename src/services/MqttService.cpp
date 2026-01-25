@@ -20,7 +20,7 @@ MqttService::MqttService(EventBus &bus, const MqttConfig &config, const DeviceCo
     m_mqttClient.setClient(m_networkClient); // Bind transport client once during construction
 
     m_eventConnections.reserve(4);
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::WifiConnected, [this](const Event &e) {
+    m_eventConnections.push_back(m_bus.subscribeScopedAny(EventType::WifiConnected, [this](const Event &e) {
         LOG_DEBUG(m_name, "WiFi connected, attempting MQTT connection");
         m_wifiReady = true;
         if (m_config.isConfigured())
@@ -28,7 +28,7 @@ MqttService::MqttService(EventBus &bus, const MqttConfig &config, const DeviceCo
             connect();
         }
     }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::WifiDisconnected, [this](const Event &e) {
+    m_eventConnections.push_back(m_bus.subscribeScopedAny(EventType::WifiDisconnected, [this](const Event &e) {
         LOG_DEBUG(m_name, "WiFi disconnected");
         m_wifiReady = false;
 
@@ -39,18 +39,21 @@ MqttService::MqttService(EventBus &bus, const MqttConfig &config, const DeviceCo
             m_bus.publish(EventType::MqttDisconnected);
         }
     }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttPublishRequest, [this](const Event &e) {
+    m_eventConnections.push_back(m_bus.subscribeExclusiveScopedAny(EventType::MqttPublishRequest, [this](Event e) {
         if (const auto *mqtt = e.get<MqttEvent>())
         {
             LOG_DEBUG(m_name, "MQTT message publish request: topic=%s, retain=%d", mqtt->topic.c_str(), mqtt->retain);
-            publish(mqtt->topic, mqtt->payload, mqtt->retain);
+            std::string topic = std::move(mqtt->topic);
+            std::string payload = std::move(mqtt->payload);
+            publish(topic, payload, mqtt->retain);
         }
     }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttSubscribeRequest, [this](const Event &e) {
+    m_eventConnections.push_back(m_bus.subscribeExclusiveScopedAny(EventType::MqttSubscribeRequest, [this](Event e) {
         if (const auto *mqtt = e.get<MqttEvent>())
         {
             LOG_DEBUG(m_name, "MQTT subscribed to topic: %s", mqtt->topic.c_str());
-            subscribe(mqtt->topic.c_str());
+            std::string topic = std::move(mqtt->topic);
+            subscribe(topic.c_str());
         }
     }));
 }
@@ -147,7 +150,7 @@ bool MqttService::publish(const char *topicSuffix, const char *payload, bool ret
         return false;
     }
 
-    const auto success{m_mqttClient.publish(buildTopic(topicSuffix).c_str(), payload, retained)};
+    const auto success{m_mqttClient.publish(buildTopicBuffer(topicSuffix), payload, retained)};
 
     if (success)
     {
@@ -171,8 +174,7 @@ bool MqttService::subscribe(const char *topicSuffix)
     if (!m_mqttClient.connected())
         return false;
 
-    std::string topic = buildTopic(topicSuffix);
-    return m_mqttClient.subscribe(topic.c_str());
+    return m_mqttClient.subscribe(buildTopicBuffer(topicSuffix));
 }
 
 bool MqttService::unsubscribe(const char *topicSuffix)
@@ -180,8 +182,7 @@ bool MqttService::unsubscribe(const char *topicSuffix)
     if (!m_mqttClient.connected())
         return false;
 
-    std::string topic = buildTopic(topicSuffix);
-    return m_mqttClient.unsubscribe(topic.c_str());
+    return m_mqttClient.unsubscribe(buildTopicBuffer(topicSuffix));
 }
 
 std::string MqttService::buildTopic(const char *suffix) const
@@ -193,6 +194,15 @@ std::string MqttService::buildTopic(const char *suffix) const
     topic = m_topicPrefix;
     topic += suffix;
     return topic;
+}
+
+const char *MqttService::buildTopicBuffer(const char *suffix)
+{
+    m_topicBuffer.clear();
+    m_topicBuffer.reserve(m_topicPrefix.length() + strlen(suffix) + 1);
+    m_topicBuffer = m_topicPrefix;
+    m_topicBuffer += suffix;
+    return m_topicBuffer.c_str();
 }
 
 void MqttService::rebuildTopicPrefix()

@@ -56,25 +56,21 @@ OtaService::OtaService(EventBus& bus, const OtaConfig& config, AsyncWebServer& w
  *   - User selects .bin file and clicks upload
  *   - onOtaStart() callback fires
  *   - State changes to OtaState::Downloading
- *   - Publishes EventType::OtaStarted to event bus
  *   - Other services can pause/prepare for update
  *
  * STEP 4: Progress Updates (onOtaProgress)
  *   - Called repeatedly as firmware chunks upload
  *   - Calculates percentage: (current/total) * 100
  *   - Logs every 10% milestone
- *   - Publishes EventType::OtaProgress events with byte counts
  *
  * STEP 5: Update Completion (onOtaEnd)
  *   - Success path:
  *     * New firmware written to OTA partition
  *     * State changes to OtaState::Completed
- *     * Publishes EventType::OtaCompleted
  *     * Device will reboot automatically
  *     * Bootloader switches to new partition
  *   - Failure path:
  *     * State changes to OtaState::Error
- *     * Publishes EventType::OtaError
  *     * Device remains on current firmware
  *
  * STEP 6: Post-Update (after reboot)
@@ -153,5 +149,4 @@ void OtaService::onOtaProgress(const std::size_t current, const std::size_t tota
     // }
 }
 } // namespace isic
-
 

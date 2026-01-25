@@ -87,7 +87,7 @@ private:
     bool m_buzzerCurrentState{false}; ///< Current buzzer state
 
     // Subscribed events
-    std::vector<EventBus::ScopedConnection> m_eventConnections{};
+    std::vector<EventBus::Subscription> m_eventConnections{};
 };
 } // namespace isic
 

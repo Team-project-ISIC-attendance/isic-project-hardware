@@ -180,7 +180,7 @@ private:
     // RTC data for deep sleep persistence
     RtcData rtcData_{};
 
-    std::vector<EventBus::ScopedConnection> eventConnections_;
+    std::vector<EventBus::Subscription> eventConnections_;
 };
 } // namespace isic
 

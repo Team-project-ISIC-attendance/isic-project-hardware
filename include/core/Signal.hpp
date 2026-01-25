@@ -16,6 +16,7 @@
 #include <functional>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace isic
@@ -282,12 +283,17 @@ public:
         {
             m_pendingRead = (m_pendingRead + 1) % kMaxPendingEvents;
             --m_pendingCount;
+            ++m_droppedCount;
         }
 
         // Store in ring buffer
         m_pendingEvents[m_pendingWrite] = PendingEvent{std::forward<Args>(args)...};
         m_pendingWrite = (m_pendingWrite + 1) % kMaxPendingEvents;
         ++m_pendingCount;
+        if (m_pendingCount > m_maxPendingCount)
+        {
+            m_maxPendingCount = m_pendingCount;
+        }
 
         return true;
     }
@@ -349,11 +355,99 @@ public:
         return dispatched;
     }
 
+    /**
+     * @brief Deliver queued events to a single subscriber using move semantics
+     *
+     * If exactly one subscriber is registered, events are moved into the
+     * callback (avoids copies for heavy payloads). If zero or multiple
+     * subscribers are present, it falls back to normal dispatch behavior.
+     */
+    std::size_t dispatchMoveSingle()
+    {
+        static_assert((std::is_move_constructible_v<std::decay_t<Args>> && ...),
+                      "dispatchMoveSingle requires move-constructible args");
+
+        std::size_t dispatched{0};
+
+        while (true)
+        {
+            PendingEvent event;
+            bool hasEvent{false};
+
+            // Extract one event under lock
+            {
+                LockGuard<Mutex> lock(m_mutex);
+                if (m_pendingCount > 0)
+                {
+                    event = std::move(m_pendingEvents[m_pendingRead]);
+                    m_pendingRead = (m_pendingRead + 1) % kMaxPendingEvents;
+                    --m_pendingCount;
+                    hasEvent = true;
+                }
+            }
+
+            if (!hasEvent)
+            {
+                break;
+            }
+
+            Callback callback;
+            bool singleSubscriber{false};
+            {
+                LockGuard<Mutex> lock(m_mutex);
+                if (m_slots.empty())
+                {
+                    ++dispatched;
+                    continue;
+                }
+                if (m_slots.size() == 1)
+                {
+                    callback = m_slots.front().callback;
+                    singleSubscriber = true;
+                }
+            }
+
+            if (singleSubscriber && callback)
+            {
+                std::apply([&](auto &&...args) { callback(std::move(args)...); }, event.args);
+            }
+            else
+            {
+                invokeCallbacks(event);
+            }
+            ++dispatched;
+        }
+
+        return dispatched;
+    }
+
     /// Number of events awaiting dispatch
     [[nodiscard]] std::size_t pendingCount() const
     {
         LockGuard<Mutex> lock(m_mutex);
         return m_pendingCount;
+    }
+
+    /// Total number of dropped events (overflow)
+    [[nodiscard]] std::size_t droppedCount() const
+    {
+        LockGuard<Mutex> lock(m_mutex);
+        return m_droppedCount;
+    }
+
+    /// Peak pending queue depth since start/reset
+    [[nodiscard]] std::size_t maxPendingCount() const
+    {
+        LockGuard<Mutex> lock(m_mutex);
+        return m_maxPendingCount;
+    }
+
+    /// Reset drop/max stats (keeps current pending count)
+    void resetStats()
+    {
+        LockGuard<Mutex> lock(m_mutex);
+        m_droppedCount = 0;
+        m_maxPendingCount = m_pendingCount;
     }
 
     /// Number of connected subscribers
@@ -430,6 +524,8 @@ private:
     std::size_t m_pendingRead{0};
     std::size_t m_pendingWrite{0};
     std::size_t m_pendingCount{0};
+    std::size_t m_droppedCount{0};
+    std::size_t m_maxPendingCount{0};
 };
 } // namespace isic
 

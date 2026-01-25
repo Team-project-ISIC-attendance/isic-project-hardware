@@ -97,7 +97,7 @@ private:
     std::uint8_t m_lastCardUidLength{0};
     std::uint32_t m_lastCardReadMs{0};
     std::uint32_t m_lastPollMs{0};
-    std::vector<EventBus::ScopedConnection> m_eventConnections{};
+    std::vector<EventBus::Subscription> m_eventConnections{};
 
     std::atomic_bool m_irqTriggered{false};
     bool m_isAsleep{false};
