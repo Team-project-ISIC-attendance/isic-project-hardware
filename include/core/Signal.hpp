@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <functional>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 namespace isic
@@ -268,8 +269,12 @@ public:
      * @par Complexity
      * O(1) for queue insertion
      */
-    bool publish(Args... args)
+    template<typename... TArgs>
+    bool publish(TArgs &&...args)
     {
+        static_assert(sizeof...(TArgs) == sizeof...(Args), "Signal::publish argument count mismatch");
+        static_assert((std::is_constructible_v<std::decay_t<Args>, TArgs &&> && ...), "Signal::publish argument type mismatch");
+
         LockGuard<Mutex> lock(m_mutex);
 
         // Ring buffer overflow: drop oldest event
@@ -288,9 +293,10 @@ public:
     }
 
     /// Convenience: operator() as alias for publish()
-    bool operator()(Args... args)
+    template<typename... TArgs>
+    bool operator()(TArgs &&...args)
     {
-        return publish(std::forward<Args>(args)...);
+        return publish(std::forward<TArgs>(args)...);
     }
 
     /**

@@ -4,6 +4,7 @@
 
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <utility>
 
 namespace isic
 {
@@ -131,9 +132,8 @@ void serializeHealthConfig(const JsonObject &health, const HealthConfig &healthC
 {
     health["healthCheckIntervalMs"] = healthConfig.healthCheckIntervalMs;
     health["statusUpdateIntervalMs"] = healthConfig.statusUpdateIntervalMs;
-    health["enabled"] = healthConfig.enabled;
+    health["metricsPublishIntervalMs"] = healthConfig.metricsPublishIntervalMs;
     health["publishToMqtt"] = healthConfig.publishToMqtt;
-    health["publishToLog"] = healthConfig.publishToLog;
 }
 
 void serializeOtaConfig(const JsonObject &ota, const OtaConfig &otaConfig)
@@ -209,7 +209,7 @@ std::string serializeToJson(const Config &config)
     serializePowerConfig(power, config.power);
 
     std::string result;
-    result.reserve(1024); // Pre-allocate for typical config size
+    result.reserve(measureJson(doc) + 1);
     serializeJson(doc, result);
     return result;
 }
@@ -386,9 +386,8 @@ bool deserializeHealthConfig(const JsonVariant &json, HealthConfig &healthConfig
 
     PARSE_NUM(json, "healthCheckIntervalMs", healthConfig.healthCheckIntervalMs);
     PARSE_NUM(json, "statusUpdateIntervalMs", healthConfig.statusUpdateIntervalMs);
-    PARSE_BOOL(json, "enabled", healthConfig.enabled);
+    PARSE_NUM(json, "metricsPublishIntervalMs", healthConfig.metricsPublishIntervalMs);
     PARSE_BOOL(json, "publishToMqtt", healthConfig.publishToMqtt);
-    PARSE_BOOL(json, "publishToLog", healthConfig.publishToLog);
 
     return changed;
 }
@@ -525,6 +524,11 @@ bool deserializeJson(const char *serviceName, const char *json, Config &config)
 #undef PARSE_STR
 #undef PARSE_NUM
 #undef PARSE_BOOL
+
+constexpr auto *kConfigSetTopicSuffix{"config/set"};
+constexpr auto *kConfigGetTopicSuffix{"config/get"};
+constexpr auto *kConfigSetTopic{"config/set/#"};
+constexpr auto *kConfigGetTopic{"config/get/#"};
 } // namespace
 
 ConfigService::ConfigService(EventBus &bus)
@@ -534,17 +538,17 @@ ConfigService::ConfigService(EventBus &bus)
 
     m_eventConnections.reserve(2);
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
-        m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = "config/set/#"}});
-        m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = "config/get/#"}});
+        m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = kConfigSetTopic}});
+        m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = kConfigGetTopic}});
     }));
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttMessage, [this](const Event &event) {
         if (const auto *mqtt = event.get<MqttEvent>())
         {
-            if (mqtt->topic.find("/config/set") != std::string::npos)
+            if (mqtt->topic.find(kConfigSetTopicSuffix) != std::string::npos)
             {
                 handleSetConfigMessage(mqtt->topic, mqtt->payload);
             }
-            else if (mqtt->topic.find("/config/get") != std::string::npos)
+            else if (mqtt->topic.find(kConfigGetTopicSuffix) != std::string::npos)
             {
                 handleGetConfigMessage(mqtt->topic);
             }
@@ -591,6 +595,7 @@ Status ConfigService::begin()
         (void) saveNow(); // TODO: handle failure?
     }
 
+    m_config.health.restoreDefaults();
     setState(ServiceState::Running);
     LOG_INFO(m_name, "Ready, device=%s, fw=%s", m_config.device.deviceId.c_str(), DeviceConfig::Constants::kFirmwareVersion);
     return Status::Ok();
@@ -770,60 +775,70 @@ void ConfigService::handleGetConfigMessage(const std::string &topic)
 {
     JsonDocument doc;
     std::string payload{};
+    std::string responseTopic{"config"};
 
     if (endsWith(topic, "/wifi"))
     {
         LOG_INFO(m_name, "Getting WiFi config");
         const auto obj{doc.to<JsonObject>()};
         serializeWifiConfig(obj, m_config.wifi);
+        responseTopic = "config/wifi";
     }
     else if (endsWith(topic, "/mqtt"))
     {
         LOG_INFO(m_name, "Getting MQTT config");
         const auto obj{doc.to<JsonObject>()};
         serializeMqttConfig(obj, m_config.mqtt);
+        responseTopic = "config/mqtt";
     }
     else if (endsWith(topic, "/device"))
     {
         LOG_INFO(m_name, "Getting Device config");
         const auto obj{doc.to<JsonObject>()};
         serializeDeviceConfig(obj, m_config.device);
+        responseTopic = "config/device";
     }
     else if (endsWith(topic, "/pn532"))
     {
         LOG_INFO(m_name, "Getting PN532 config");
         const auto obj{doc.to<JsonObject>()};
         serializePn532Config(obj, m_config.pn532);
+        responseTopic = "config/pn532";
     }
     else if (endsWith(topic, "/attendance"))
     {
         LOG_INFO(m_name, "Getting Attendance config");
         const auto obj{doc.to<JsonObject>()};
         serializeAttendanceConfig(obj, m_config.attendance);
+        responseTopic = "config/attendance";
     }
     else if (endsWith(topic, "/feedback"))
     {
         LOG_INFO(m_name, "Getting Feedback config");
         const auto obj{doc.to<JsonObject>()};
         serializeFeedbackConfig(obj, m_config.feedback);
+        responseTopic = "config/feedback";
     }
     else if (endsWith(topic, "/health"))
     {
         LOG_INFO(m_name, "Getting Health config");
         const auto obj{doc.to<JsonObject>()};
         serializeHealthConfig(obj, m_config.health);
+        responseTopic = "config/health";
     }
     else if (endsWith(topic, "/ota"))
     {
         LOG_INFO(m_name, "Getting OTA config");
         const auto obj{doc.to<JsonObject>()};
         serializeOtaConfig(obj, m_config.ota);
+        responseTopic = "config/ota";
     }
     else if (endsWith(topic, "/power"))
     {
         LOG_INFO(m_name, "Getting Power config");
         const auto obj{doc.to<JsonObject>()};
         serializePowerConfig(obj, m_config.power);
+        responseTopic = "config/power";
     }
     else
     {
@@ -833,10 +848,11 @@ void ConfigService::handleGetConfigMessage(const std::string &topic)
 
     if (payload.empty())
     {
-        payload.reserve(1024); // Pre-allocate for typical config size
+        const auto jsonSize = measureJson(doc);
+        payload.reserve(jsonSize + 1);
         serializeJson(doc, payload);
     }
 
-    m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = "config", .payload = payload}});
+    m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = std::move(responseTopic), .payload = std::move(payload)}});
 }
 } // namespace isic

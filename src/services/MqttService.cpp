@@ -10,10 +10,6 @@
 
 namespace isic
 {
-// Static instance for callback, for me antipattern, but PubSubClient requires a static function
-// TODO: we can improve this later with a better design, like using a singleton or passing context or std::function
-MqttService *MqttService::s_instance = nullptr;
-
 MqttService::MqttService(EventBus &bus, const MqttConfig &config, const DeviceConfig &deviceConfig)
     : ServiceBase("MqttService")
     , m_bus(bus)
@@ -46,12 +42,14 @@ MqttService::MqttService(EventBus &bus, const MqttConfig &config, const DeviceCo
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttPublishRequest, [this](const Event &e) {
         if (const auto *mqtt = e.get<MqttEvent>())
         {
+            LOG_DEBUG(m_name, "MQTT message publish request: topic=%s, retain=%d", mqtt->topic.c_str(), mqtt->retain);
             publish(mqtt->topic, mqtt->payload, mqtt->retain);
         }
     }));
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttSubscribeRequest, [this](const Event &e) {
         if (const auto *mqtt = e.get<MqttEvent>())
         {
+            LOG_DEBUG(m_name, "MQTT subscribed to topic: %s", mqtt->topic.c_str());
             subscribe(mqtt->topic.c_str());
         }
     }));
@@ -87,25 +85,37 @@ void MqttService::loop()
         return;
     }
 
-    if (!m_mqttClient.connected())
+    if (m_mqttClient.connected())
     {
-        if (m_mqttState == MqttState::Connected)
+        m_mqttClient.loop();
+
+        if (!m_mqttClient.connected() && m_mqttState == MqttState::Connected)
         {
             m_mqttState = MqttState::Disconnected;
-
-            // Service no longer fully operational - back to Ready state
             setState(ServiceState::Ready);
-
             m_bus.publish(EventType::MqttDisconnected);
-            LOG_WARN(m_name, "MQTT disconnected - service now Ready (will reconnect)");
+            LOG_WARN(m_name, "MQTT disconnected during loop - service now Ready (will reconnect)");
         }
+        return;
+    }
 
-        // Reconnect with exponential backoff
-        std::uint32_t backoff = calculateBackoff();
-        if (millis() - m_lastConnectAttemptMs >= backoff)
-        {
-            connect();
-        }
+    // Not connected
+    if (m_mqttState == MqttState::Connected)
+    {
+        m_mqttState = MqttState::Disconnected;
+
+        // Service no longer fully operational - back to Ready state
+        setState(ServiceState::Ready);
+
+        m_bus.publish(EventType::MqttDisconnected);
+        LOG_WARN(m_name, "MQTT disconnected - service now Ready (will reconnect)");
+    }
+
+    // Reconnect with exponential backoff
+    std::uint32_t backoff = calculateBackoff();
+    if (millis() - m_lastConnectAttemptMs >= backoff)
+    {
+        connect();
     }
 }
 

@@ -14,6 +14,11 @@ constexpr bool isStateHealthy(const HealthState state) noexcept
 {
     return (state == HealthState::Healthy) || (state == HealthState::Unknown); // Treat Unknown as healthy for overall state
 }
+
+constexpr auto *kHealthRequestTopic{"health/request"};
+constexpr auto *kMetricsRequestTopic{"metrics/request"};
+constexpr auto *kHealthPublishTopic{"health"};
+constexpr auto *kMetricsPublishTopic{"metrics"};
 } // namespace
 
 HealthService::HealthService(EventBus &bus, HealthConfig &config)
@@ -24,33 +29,38 @@ HealthService::HealthService(EventBus &bus, HealthConfig &config)
     m_components.reserve(HealthConfig::Constants::kMaxComponentsCount);
 
     // Subscribers
-    m_eventConnections.reserve(2);
+    m_eventConnections.reserve(3);
 
     // MQTT connected - subscribe to health/request topic and publish status
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
-        m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = "health/request", .payload = "", .retain = false}});
-        m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = "metrics/request", .payload = "", .retain = false}});
+        m_mqttConnected = true;
+
+        m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = kHealthRequestTopic, .payload = "", .retain = false}});
+        m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = kMetricsRequestTopic, .payload = "", .retain = false}});
 
         if (m_config.publishToMqtt)
         {
-            LOG_DEBUG(m_name, "MQTT connected - publishing initial status update");
-            publishHealthUpdate();
+            LOG_DEBUG(m_name, "MQTT connected - scheduling initial status update");
+            m_pendingHealthPublish = true;
         }
+    }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttDisconnected, [this](const Event &) {
+        m_mqttConnected = false;
     }));
 
     // Handle incoming status requests via MQTT
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttMessage, [this](const Event &e) {
         if (const auto *mqtt = e.get<MqttEvent>())
         {
-            if (mqtt->topic.find("health/request") != std::string::npos)
+            if (mqtt->topic.find(kHealthRequestTopic) != std::string::npos)
             {
                 LOG_DEBUG(m_name, "Status update requested via MQTT");
-                publishHealthUpdate();
+                m_pendingHealthPublish = true;
             }
-            else if (mqtt->topic.find("metrics/request") != std::string::npos)
+            else if (mqtt->topic.find(kMetricsRequestTopic) != std::string::npos)
             {
                 LOG_DEBUG(m_name, "Metrics update requested via MQTT");
-                publishMetricsUpdate();
+                m_pendingMetricsPublish = true;
             }
         }
     }));
@@ -70,7 +80,7 @@ Status HealthService::begin()
     m_systemHealth.overallState = HealthState::Healthy;
 
     setState(ServiceState::Running);
-    LOG_INFO(m_name, "Ready (health=%s, check=5min, status=1min), heap=%u", toString(m_systemHealth.overallState), ESP.getFreeHeap());
+    LOG_INFO(m_name, "Health service started");
     return Status::Ok();
 }
 
@@ -82,18 +92,36 @@ void HealthService::loop()
     }
 
     const auto now{millis()};
+    auto updatedForInterval{false};
 
     if ((now - m_lastHealthCheckMs) >= m_config.healthCheckIntervalMs)
     {
         updateSystemHealth();
         m_lastHealthCheckMs = now;
+        updatedForInterval = true;
     }
 
-    const auto isHealthIntervalElapsed{((now - m_lastHealthPublishMs) >= m_config.statusUpdateIntervalMs)};
-    const auto isMetricsIntervalElapsed{((now - m_lastMetricsPublishMs) >= m_config.metricsPublishIntervalMs)};
-
-    if (m_config.publishToMqtt)
+    if (m_pendingHealthPublish)
     {
+        if (!updatedForInterval)
+        {
+            updateSystemHealth();
+        }
+        publishHealthUpdate();
+        m_pendingHealthPublish = false;
+    }
+
+    if (m_pendingMetricsPublish)
+    {
+        publishMetricsUpdate();
+        m_pendingMetricsPublish = false;
+    }
+
+    if (m_config.publishToMqtt && m_mqttConnected)
+    {
+        const auto isHealthIntervalElapsed{((now - m_lastHealthPublishMs) >= m_config.statusUpdateIntervalMs)};
+        const auto isMetricsIntervalElapsed{((now - m_lastMetricsPublishMs) >= m_config.metricsPublishIntervalMs)};
+
         if (isHealthIntervalElapsed)
         {
             LOG_DEBUG(m_name, "Periodic health status update");
@@ -191,8 +219,10 @@ void HealthService::updateSystemHealth()
 
 void HealthService::publishHealthUpdate()
 {
-    // Ensure health data is fresh before publishing
-    updateSystemHealth();
+    if (!m_config.publishToMqtt || !m_mqttConnected)
+    {
+        return;
+    }
 
     JsonDocument doc;
     doc["device_id"] = DeviceConfig::kDefaultDeviceId;
@@ -209,11 +239,11 @@ void HealthService::publishHealthUpdate()
     doc["wifi_rssi_state"] = toString(m_systemHealth.wifiState);
 
     std::string json;
-    json.reserve(512); // Pre-allocate for typical status size
+    json.reserve(measureJson(doc) + 1);
     serializeJson(doc, json);
 
     m_bus.publish(Event{EventType::MqttPublishRequest, MqttEvent{
-                                                               .topic = "health",
+                                                               .topic = kHealthPublishTopic,
                                                                .payload = std::move(json),
                                                                .retain = true}});
 
@@ -222,6 +252,11 @@ void HealthService::publishHealthUpdate()
 
 void HealthService::publishMetricsUpdate()
 {
+    if (!m_config.publishToMqtt || !m_mqttConnected)
+    {
+        return;
+    }
+
     JsonDocument doc;
 
     // Let each service serialize its metrics using its name as key
@@ -235,13 +270,14 @@ void HealthService::publishMetricsUpdate()
     }
 
     std::string json;
-    json.reserve(512); // Pre-allocate for typical metrics size
+    json.reserve(measureJson(doc) + 1);
     serializeJson(doc, json);
 
-    m_bus.publish(Event{EventType::MqttPublishRequest, MqttEvent{
-                                                               .topic = "metrics",
-                                                               .payload = std::move(json),
-                                                               .retain = true}});
+    m_bus.publish(Event{EventType::MqttPublishRequest,
+                        MqttEvent{
+                                .topic = kMetricsPublishTopic,
+                                .payload = std::move(json),
+                                .retain = true}});
 
     LOG_INFO(m_name, "Publishing metrics update");
 }

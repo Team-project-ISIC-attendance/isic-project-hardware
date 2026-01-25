@@ -14,6 +14,7 @@
 #include "core/Signal.hpp"
 
 #include <array>
+#include <utility>
 
 namespace isic
 {
@@ -152,7 +153,7 @@ public:
      * Subscribers are NOT invoked immediately - events are delivered
      * during the next dispatch() call.
      *
-     * @param event Event to publish (copied into queue)
+     * @param event Event to publish (moved into queue)
      * @return true if queued successfully, false if queue full or invalid type
      *
      * @note ISR-safe: can be called from interrupt handlers
@@ -161,14 +162,24 @@ public:
      * @par Complexity
      * O(1) amortized for queue insertion
      */
-    bool publish(const Event &event)
+    bool publish(Event &&event)
     {
         if (event.type >= EventType::_Count)
         {
             return false;
         }
-        return m_signals[static_cast<std::size_t>(event.type)].publish(event);
+        return m_signals[static_cast<std::size_t>(event.type)].publish(std::move(event));
     }
+
+    /**
+     * @brief Deleted overload to prevent accidental copies
+     *
+     * @param event Event to publish
+     * @return false always
+     *
+     * @note Use rvalue reference overload to avoid copies
+     */
+    bool publish(const Event &event) = delete;
 
     /**
      * @brief Convenience overload to publish event without payload

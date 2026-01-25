@@ -283,18 +283,15 @@ struct HealthConfig
     };
 
     static constexpr auto kDefaultEnabled{true};
-    static constexpr auto kDefaultHealthCheckIntervalMs{300'000}; // 5 minutes
-    static constexpr auto kDefaultStatusUpdateIntervalMs{60'000}; // 1 minute
+    static constexpr auto kDefaultHealthCheckIntervalMs{1'800'000}; // 30 minutes
+    static constexpr auto kDefaultStatusUpdateIntervalMs{600'000}; // 10 minutes
     static constexpr auto kDefaultMetricsPublishIntervalMs{3'600'000}; // 1 hour
     static constexpr auto kDefaultPublishToMqtt{true};
-    static constexpr auto kDefaultPublishToLog{true};
 
     std::uint32_t healthCheckIntervalMs{kDefaultHealthCheckIntervalMs};
     std::uint32_t statusUpdateIntervalMs{kDefaultStatusUpdateIntervalMs};
     std::uint32_t metricsPublishIntervalMs{kDefaultMetricsPublishIntervalMs};
-    bool enabled{kDefaultEnabled};
     bool publishToMqtt{kDefaultPublishToMqtt};
-    bool publishToLog{kDefaultPublishToLog};
 
     [[nodiscard]] constexpr bool isConfigured() const // NOLINT
     {
@@ -306,9 +303,7 @@ struct HealthConfig
         healthCheckIntervalMs = kDefaultHealthCheckIntervalMs;
         statusUpdateIntervalMs = kDefaultStatusUpdateIntervalMs;
         metricsPublishIntervalMs = kDefaultMetricsPublishIntervalMs;
-        enabled = kDefaultEnabled;
         publishToMqtt = kDefaultPublishToMqtt;
-        publishToLog = kDefaultPublishToLog;
     }
 };
 

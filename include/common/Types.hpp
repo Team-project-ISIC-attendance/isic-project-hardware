@@ -336,7 +336,6 @@ struct Event
     using Payload = std::variant<std::monostate, CardEvent, MqttEvent, FeedbackEvent, PowerEvent>;
 
     Payload data{std::monostate{}};
-    std::uint32_t timestampMs{0};
     EventType type{EventType::None};
     std::uint8_t priority{0};
 

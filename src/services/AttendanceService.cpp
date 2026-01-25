@@ -33,6 +33,7 @@ std::string serializeBatch(const std::vector<AttendanceRecord> &records)
     }
 
     std::string json;
+    json.reserve(measureJson(doc) + 1);
     serializeJson(doc, json);
 
     return json; // NRVO must apply
