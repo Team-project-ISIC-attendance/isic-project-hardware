@@ -11,7 +11,18 @@ namespace isic
 {
 namespace
 {
-// Store HTML in flash memory to save RAM
+// Lifehack when use username field - injected via compile-time string literal concatenation, see below is just not safe but works
+#ifdef ISIC_WIFI_EDUROAM
+#define EDUROAM_USERNAME_FIELD \
+    "            <div class=\"form-group\">\n" \
+    "                <label>WiFi Username (Eduroam)</label>\n" \
+    "                <input type=\"text\" id=\"username\" name=\"username\" placeholder=\"Enter Eduroam username\">\n" \
+    "            </div>\n"
+#else
+#define EDUROAM_USERNAME_FIELD
+#endif
+
+// Store HTML in flash memory to save RAM - single constexpr, zero runtime cost
 constexpr char CONFIG_HTML[] PROGMEM = R"(
 <!DOCTYPE html>
 <html lang="en">
@@ -138,6 +149,7 @@ constexpr char CONFIG_HTML[] PROGMEM = R"(
                 <label>WiFi Network</label>
                 <input type="text" id="ssid" name="ssid" required placeholder="Enter SSID">
             </div>
+)" EDUROAM_USERNAME_FIELD R"(
             <div class="form-group">
                 <label>WiFi Password</label>
                 <input type="password" id="password" name="password" placeholder="Enter password">
@@ -440,7 +452,12 @@ void WiFiService::connectToStation()
     }
 
     WiFi.mode(WIFI_STA);
+
+#ifdef ISIC_WIFI_EDUROAM
+    platform::connectEduroam(m_config.stationSsid.c_str(), m_config.stationUsername.c_str(), m_config.stationPassword.c_str());
+#else
     WiFi.begin(m_config.stationSsid.c_str(), m_config.stationPassword.c_str());
+#endif
 
     m_wifiState = WiFiState::Connecting;
     m_connectStartMs = millis();
@@ -620,7 +637,6 @@ void WiFiService::handleScanNetworks(AsyncWebServerRequest *request)
 void WiFiService::handleSaveConfig(AsyncWebServerRequest *request)
 {
     const auto ssid{request->hasParam("ssid", true) ? request->getParam("ssid", true)->value() : ""};
-    const auto password{request->hasParam("password", true) ? request->getParam("password", true)->value() : ""};
 
     if (ssid.isEmpty())
     {
@@ -632,7 +648,18 @@ void WiFiService::handleSaveConfig(AsyncWebServerRequest *request)
     m_configService.update([&](Config &cfg) {
         // Update WiFi configuration
         cfg.wifi.stationSsid = ssid.c_str();
-        cfg.wifi.stationPassword = password.c_str();
+
+        if (request->hasParam("password", true))
+        {
+            cfg.wifi.stationPassword = request->getParam("password", true)->value().c_str();
+        }
+
+#ifdef ISIC_WIFI_EDUROAM
+        if (request->hasParam("username", true))
+        {
+            cfg.wifi.stationUsername = request->getParam("username", true)->value().c_str();
+        }
+#endif
 
         // Update MQTT configuration (optional)
         if (request->hasParam("mqtt_broker", true))

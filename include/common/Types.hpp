@@ -152,12 +152,6 @@ enum class EventType : std::uint8_t
     AttendanceRecorded,
     AttendanceError,
 
-    // OTA
-    OtaStarted,
-    OtaProgress,
-    OtaCompleted,
-    OtaError,
-
     // Feedback
     FeedbackRequest,
 

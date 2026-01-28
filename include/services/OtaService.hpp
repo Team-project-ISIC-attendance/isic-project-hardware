@@ -4,21 +4,16 @@
 #include "core/EventBus.hpp"
 #include "core/IService.hpp"
 #include "common/Config.hpp"
+#include "platform/PlatformOta.hpp"
 
 #include <array>
 #include <vector>
 
-#ifdef ISIC_PLATFORM_ESP8266
-#include <ESP8266HTTPClient.h>
-#elif defined(ISIC_PLATFORM_ESP32)
-#include <HTTPClient.h>
-#endif
-#include <WiFiClient.h>
+///< Forward declaration of Stream class
 class Stream;
 
 namespace isic
 {
-
 class OtaService : public ServiceBase
 {
 public:
@@ -63,19 +58,23 @@ private:
     OtaState m_otaState{OtaState::Idle};
     std::uint8_t m_progress{0};
     bool m_pendingCheck{false};
+    bool m_mqttConnected{false};
+    bool m_downloadActive{false};
+
+    std::uint32_t m_updateTotalSize{0};
+    std::uint32_t m_updateDownloaded{0};
+    std::uint32_t m_lastDownloadActivityMs{0};
+    std::uint32_t m_lastProgressPublishMs{0};
 
     HTTPClient m_updateHttp;
     WiFiClient m_updateClient;
     Stream *m_updateStream{nullptr};
     std::string m_updateMd5{};
-    std::uint32_t m_updateTotalSize{0};
-    std::uint32_t m_updateDownloaded{0};
-    std::uint32_t m_lastDownloadActivityMs{0};
-    std::uint32_t m_lastProgressPublishMs{0};
-    bool m_downloadActive{false};
-    std::array<std::uint8_t, 1024> m_downloadBuffer{};
 
-    std::vector<EventBus::ScopedConnection> m_eventConnections;
+    static constexpr std::size_t kDownloadBufferSize{1024};
+    std::array<std::uint8_t, kDownloadBufferSize> m_downloadBuffer{};
+
+    std::vector<EventBus::ScopedConnection> m_eventConnections{};
 };
 
 } // namespace isic

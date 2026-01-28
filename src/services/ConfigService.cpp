@@ -61,6 +61,9 @@ void serializeWifiConfig(const JsonObject &wifi, const WiFiConfig &wifiConfig)
 {
     wifi["stationSsid"] = wifiConfig.stationSsid;
     wifi["stationPassword"] = wifiConfig.stationPassword;
+#ifdef ISIC_WIFI_EDUROAM
+    wifi["stationUsername"] = wifiConfig.stationUsername;
+#endif
     wifi["stationConnectRetryDelayMs"] = wifiConfig.stationConnectRetryDelayMs;
     wifi["stationConnectionTimeoutMs"] = wifiConfig.stationConnectionTimeoutMs;
     wifi["stationFastReconnectIntervalMs"] = wifiConfig.stationFastReconnectIntervalMs;
@@ -253,6 +256,9 @@ bool deserializeWifiConfig(const JsonVariant &json, WiFiConfig &wifiConfig)
 
     PARSE_STR(json, "stationSsid", wifiConfig.stationSsid);
     PARSE_STR(json, "stationPassword", wifiConfig.stationPassword);
+#ifdef ISIC_WIFI_EDUROAM
+    PARSE_STR(json, "stationUsername", wifiConfig.stationUsername);
+#endif
     PARSE_NUM(json, "stationConnectRetryDelayMs", wifiConfig.stationConnectRetryDelayMs);
     PARSE_NUM(json, "stationConnectionTimeoutMs", wifiConfig.stationConnectionTimeoutMs);
     PARSE_NUM(json, "StationFastReconnectIntervalMs", wifiConfig.stationFastReconnectIntervalMs);

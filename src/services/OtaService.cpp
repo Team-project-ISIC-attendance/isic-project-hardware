@@ -4,28 +4,18 @@
 
 #include "common/Logger.hpp"
 
-#ifdef ISIC_PLATFORM_ESP8266
-#include <ESP8266HTTPClient.h>
-#elif defined(ISIC_PLATFORM_ESP32)
-#include <HTTPClient.h>
-#endif
-
 #include <ArduinoJson.h>
 #include <Stream.h>
-#include <Update.h>
-#include <WiFiClient.h>
 #include <algorithm>
 
 namespace isic
 {
 namespace
 {
-constexpr auto *TAG{"OtaService"};
-
 int compareVersions(const char *v1, const char *v2)
 {
-    int major1 = 0, minor1 = 0, patch1 = 0;
-    int major2 = 0, minor2 = 0, patch2 = 0;
+    auto major1 = 0, minor1 = 0, patch1 = 0;
+    auto major2 = 0, minor2 = 0, patch2 = 0;
 
     sscanf(v1, "%d.%d.%d", &major1, &minor1, &patch1);
     sscanf(v2, "%d.%d.%d", &major2, &minor2, &patch2);
@@ -44,22 +34,30 @@ OtaService::OtaService(EventBus &bus, const OtaConfig &config)
 {
     m_eventConnections.reserve(3);
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
+        const bool firstConnect{!m_mqttConnected};
+        m_mqttConnected = true;
+
         m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = "ota/start"}});
-    }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttMessage, [this](const Event &event) {
-        if (const auto *mqtt = event.get<MqttEvent>())
+
+        if (firstConnect && m_config.checkOnConnect && m_config.isConfigured())
         {
-            if (mqtt->topic.find("/ota/start") != std::string::npos)
-            {
-                m_pendingCheck = true;
-            }
+            LOG_INFO(m_name, "First MQTT connect, scheduling OTA check");
+            m_pendingCheck = true;
         }
     }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::WifiDisconnected, [this](const Event &) {
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttDisconnected, [this](const Event &) {
+        m_mqttConnected = false;
+
         if (m_otaState == OtaState::Downloading)
         {
-            LOG_WARN(TAG, "WiFi disconnected, aborting OTA");
-            failDownload("WiFi disconnected");
+            LOG_WARN(m_name, "MQTT disconnected, aborting OTA");
+            failDownload("Connection lost");
+        }
+    }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttMessage, [this](const Event &event) {
+        if (const auto *mqtt = event.get<MqttEvent>(); mqtt && mqtt->topic.find("/ota/start") != std::string::npos)
+        {
+            m_pendingCheck = true;
         }
     }));
 }
@@ -67,33 +65,16 @@ OtaService::OtaService(EventBus &bus, const OtaConfig &config)
 Status OtaService::begin()
 {
     setState(ServiceState::Initializing);
-    LOG_INFO(TAG, "Initializing...");
+    LOG_INFO(m_name, "Initializing...");
 
     if (!m_config.enabled)
     {
-        LOG_INFO(TAG, "Disabled by config");
+        LOG_INFO(m_name, "Disabled by config");
         setState(ServiceState::Running);
         return Status::Ok();
     }
 
-    // Auto-check on WiFi connect
-    if (m_config.checkOnConnect && m_config.isConfigured())
-    {
-        m_eventConnections.push_back(m_bus.subscribeScoped(EventType::WifiConnected, [this](const Event &) {
-            LOG_INFO(TAG, "WiFi connected, scheduling check");
-            m_pendingCheck = true;
-        }));
-    }
-
-    if (m_config.isConfigured())
-    {
-        LOG_INFO(TAG, "Server: %s", m_config.serverUrl.c_str());
-    }
-    else
-    {
-        LOG_INFO(TAG, "Server not configured");
-    }
-
+    LOG_INFO(m_name, "Server configured: %s", m_config.isConfigured() ? "yes" : "no");
     setState(ServiceState::Running);
     return Status::Ok();
 }
@@ -108,13 +89,13 @@ void OtaService::loop()
     if (m_pendingCheck && m_otaState != OtaState::Downloading)
     {
         m_pendingCheck = false;
-        LOG_INFO(TAG, "OTA check requested");
+        LOG_INFO(m_name, "OTA check requested");
         checkForUpdate();
     }
 
     if (m_otaState == OtaState::Downloading)
     {
-        LOG_INFO(TAG, "Processing OTA download...");
+        LOG_INFO(m_name, "Processing OTA download...");
         processDownload();
     }
 }
@@ -129,38 +110,43 @@ void OtaService::checkForUpdate()
 {
     if (!m_config.isConfigured())
     {
-        LOG_WARN(TAG, "Server not configured");
+        LOG_WARN(m_name, "Server not configured");
         return;
     }
 
     if (m_otaState == OtaState::Downloading)
     {
-        LOG_WARN(TAG, "Update already in progress");
+        LOG_WARN(m_name, "Update already in progress");
         return;
     }
 
-    if (WiFi.status() != WL_CONNECTED)
+    if (!m_mqttConnected)
     {
-        LOG_WARN(TAG, "WiFi not connected");
+        LOG_WARN(m_name, "Not connected");
         return;
     }
 
-    LOG_INFO(TAG, "Checking for updates...");
+    LOG_INFO(m_name, "Checking for updates...");
     m_otaState = OtaState::Checking;
 
-    std::string serverVersion, serverMd5;
     std::uint32_t serverSize{0};
+    std::string serverVersion{};
+    std::string serverMd5{};
+
+    serverVersion.reserve(12);
+    serverMd5.reserve(32);
+
     if (!fetchManifest(serverVersion, serverMd5, serverSize))
     {
-        LOG_ERROR(TAG, "Failed to fetch manifest");
+        LOG_ERROR(m_name, "Failed to fetch manifest");
         m_otaState = OtaState::Idle;
         return;
     }
 
     if (isNewerVersion(serverVersion))
     {
-        LOG_INFO(TAG, "Update: %s -> %s", DeviceConfig::Constants::kFirmwareVersion, serverVersion.c_str());
-        m_bus.publish(EventType::OtaStarted);
+        LOG_INFO(m_name, "Update: %s -> %s", DeviceConfig::Constants::kFirmwareVersion, serverVersion.c_str());
+        m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = "ota/update_available", .payload = serverVersion}});
         if (!beginDownload(serverMd5, serverSize))
         {
             failDownload("Failed to start download");
@@ -168,73 +154,61 @@ void OtaService::checkForUpdate()
     }
     else
     {
-        LOG_INFO(TAG, "Up to date (v%s)", DeviceConfig::Constants::kFirmwareVersion);
+        LOG_INFO(m_name, "Up to date (v%s)", DeviceConfig::Constants::kFirmwareVersion);
         m_otaState = OtaState::Idle;
     }
 }
 
 bool OtaService::fetchManifest(std::string &outVersion, std::string &outMd5, std::uint32_t &outSize)
 {
-    WiFiClient client;
-    HTTPClient http;
+    const std::string url{m_config.serverUrl + "/manifest.json"};
+    m_updateHttp.setTimeout(m_config.timeoutMs);
 
-    std::string url = m_config.serverUrl + "/manifest.json";
-    http.setTimeout(m_config.timeoutMs);
-
-    if (!http.begin(client, url.c_str()))
+    if (!m_updateHttp.begin(m_updateClient, url.c_str()))
     {
-        LOG_ERROR(TAG, "HTTP begin failed");
+        LOG_ERROR(m_name, "HTTP begin failed");
         return false;
     }
 
     if (!m_config.username.empty())
     {
-        http.setAuthorization(m_config.username.c_str(), m_config.password.c_str());
+        m_updateHttp.setAuthorization(m_config.username.c_str(), m_config.password.c_str());
     }
 
-    int code = http.GET();
-    if (code != HTTP_CODE_OK)
+    if (const auto code = m_updateHttp.GET(); code != HTTP_CODE_OK)
     {
-        LOG_ERROR(TAG, "HTTP %d", code);
-        http.end();
+        LOG_ERROR(m_name, "HTTP %d", code);
+        m_updateHttp.end();
         return false;
     }
 
-    String payload = http.getString();
-    http.end();
+    String payload{m_updateHttp.getString()};
+    m_updateHttp.end();
 
     JsonDocument doc;
     if (deserializeJson(doc, payload))
     {
-        LOG_ERROR(TAG, "JSON parse failed");
+        LOG_ERROR(m_name, "JSON parse failed");
         return false;
     }
 
     if (!doc["version"].is<const char *>())
     {
-        LOG_ERROR(TAG, "Missing 'version'");
+        LOG_ERROR(m_name, "Missing 'version'");
         return false;
     }
 
     if(!doc["board"].is<const char *>())
     {
-        LOG_ERROR(TAG, "Missing 'board'");
+        LOG_ERROR(m_name, "Missing 'board'");
         return false;
     }
 
-    #ifdef ISIC_PLATFORM_ESP8266
-    if(strcmp(doc["board"].as<const char *>(), "esp8266") != 0)
+    if (strcmp(doc["board"].as<const char *>(), platform::kBoardName) != 0)
     {
-        LOG_ERROR(TAG, "Manifest board mismatch");
+        LOG_ERROR(m_name, "Manifest board mismatch");
         return false;
     }
-    #elif defined(ISIC_PLATFORM_ESP32)
-    if(strcmp(doc["board"].as<const char *>(), "esp32dev") != 0)
-    {
-        LOG_ERROR(TAG, "Manifest board mismatch");
-        return false;
-    }
-    #endif
 
     outVersion = doc["version"].as<const char *>();
     if (doc["md5"].is<const char *>())
@@ -262,10 +236,10 @@ bool OtaService::isNewerVersion(const std::string &serverVersion) const
     return compareVersions(serverVersion.c_str(), DeviceConfig::Constants::kFirmwareVersion) > 0;
 }
 
-bool OtaService::beginDownload(const std::string &expectedMd5, std::uint32_t expectedSize)
+bool OtaService::beginDownload(const std::string &expectedMd5, const std::uint32_t expectedSize)
 {
-    std::string url = m_config.serverUrl + "/firmware.bin";
-    LOG_INFO(TAG, "Starting download: %s", url.c_str());
+    std::string url{m_config.serverUrl + "/manifest.json"};
+    LOG_INFO(m_name, "Starting download: %s", url.c_str());
 
     m_otaState = OtaState::Downloading;
     m_progress = 0;
@@ -278,7 +252,7 @@ bool OtaService::beginDownload(const std::string &expectedMd5, std::uint32_t exp
     m_updateHttp.setTimeout(m_config.timeoutMs);
     if (!m_updateHttp.begin(m_updateClient, url.c_str()))
     {
-        LOG_ERROR(TAG, "HTTP begin failed");
+        LOG_ERROR(m_name, "HTTP begin failed");
         return false;
     }
 
@@ -287,40 +261,27 @@ bool OtaService::beginDownload(const std::string &expectedMd5, std::uint32_t exp
         m_updateHttp.setAuthorization(m_config.username.c_str(), m_config.password.c_str());
     }
 
-    const int code = m_updateHttp.GET();
-    if (code != HTTP_CODE_OK)
+    if (const auto code = m_updateHttp.GET(); code != HTTP_CODE_OK)
     {
-        LOG_ERROR(TAG, "HTTP %d", code);
+        LOG_ERROR(m_name, "HTTP %d", code);
         m_updateHttp.end();
         return false;
     }
 
     if (m_updateTotalSize == 0)
     {
-        const int reportedSize = m_updateHttp.getSize();
-        if (reportedSize > 0)
+        if (const auto reportedSize = m_updateHttp.getSize(); reportedSize > 0)
         {
             m_updateTotalSize = static_cast<std::uint32_t>(reportedSize);
         }
     }
 
-    if (m_updateTotalSize > 0)
+    const auto updateSize = m_updateTotalSize > 0 ? m_updateTotalSize : platform::kUpdateSizeUnknown;
+    if (!Update.begin(updateSize))
     {
-        if (!Update.begin(m_updateTotalSize))
-        {
-            LOG_ERROR(TAG, "Update begin failed: %u", Update.getError());
-            m_updateHttp.end();
-            return false;
-        }
-    }
-    else
-    {
-        if (!Update.begin(UPDATE_SIZE_UNKNOWN))
-        {
-            LOG_ERROR(TAG, "Update begin failed: %u", Update.getError());
-            m_updateHttp.end();
-            return false;
-        }
+        LOG_ERROR(m_name, "Update begin failed: %u", Update.getError());
+        m_updateHttp.end();
+        return false;
     }
 
     if (!m_updateMd5.empty())
@@ -331,8 +292,8 @@ bool OtaService::beginDownload(const std::string &expectedMd5, std::uint32_t exp
     m_updateStream = m_updateHttp.getStreamPtr();
     if (m_updateStream == nullptr)
     {
-        LOG_ERROR(TAG, "Stream not available");
-        Update.abort();
+        LOG_ERROR(m_name, "Stream not available");
+        Update.end(false);
         m_updateHttp.end();
         return false;
     }
@@ -358,9 +319,9 @@ void OtaService::processDownload()
     {
         const auto now = millis();
 
-        if (WiFi.status() != WL_CONNECTED)
+        if (!m_mqttConnected)
         {
-            failDownload("WiFi disconnected");
+            failDownload("Connection lost");
             return;
         }
 
@@ -381,29 +342,28 @@ void OtaService::processDownload()
             return;
         }
 
-        const int available = m_updateStream->available();
+        const auto available = m_updateStream->available();
         if (available <= 0)
         {
             yield();
             break;
         }
 
-        const auto toRead = static_cast<std::size_t>(
-            std::min<int>(available, static_cast<int>(m_downloadBuffer.size())));
+        const auto toRead{static_cast<std::size_t>(std::min(available, static_cast<int>(m_downloadBuffer.size())))};
         if (toRead == 0)
         {
             yield();
             break;
         }
 
-        const auto bytesRead = m_updateStream->readBytes(m_downloadBuffer.data(), toRead);
+        const auto bytesRead{m_updateStream->readBytes(m_downloadBuffer.data(), toRead)};
         if (bytesRead == 0)
         {
             yield();
             break;
         }
 
-        const auto bytesWritten = Update.write(m_downloadBuffer.data(), bytesRead);
+        const auto bytesWritten{Update.write(m_downloadBuffer.data(), bytesRead)};
         if (bytesWritten != bytesRead)
         {
             failDownload("Update write failed");
@@ -415,14 +375,12 @@ void OtaService::processDownload()
 
         if (m_updateTotalSize > 0)
         {
-            const auto progress = static_cast<std::uint8_t>(
-                std::min<std::uint32_t>(100, (m_updateDownloaded * 100U) / m_updateTotalSize));
-
-            if (progress != m_progress && now - m_lastProgressPublishMs >= OtaConfig::Constants::kProgressPublishIntervalMs)
+            const auto progress{static_cast<std::uint8_t>(std::min<std::uint32_t>(100, (m_updateDownloaded * 100U) / m_updateTotalSize))};
+            if ((progress != m_progress) && (now - m_lastProgressPublishMs >= OtaConfig::Constants::kProgressPublishIntervalMs))
             {
                 m_progress = progress;
                 m_lastProgressPublishMs = now;
-                m_bus.publish(EventType::OtaProgress);
+                m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = "ota/progress", .payload = std::to_string(m_progress)}});
             }
         }
     }
@@ -432,22 +390,22 @@ void OtaService::completeDownload()
 {
     if (!Update.end())
     {
-        LOG_ERROR(TAG, "Update failed: %u", Update.getError());
+        LOG_ERROR(m_name, "Update failed: %u", Update.getError());
         failDownload("Update end failed");
         return;
     }
 
     if (m_updateTotalSize > 0 && m_updateDownloaded < m_updateTotalSize)
     {
-        LOG_ERROR(TAG, "Incomplete update: %u/%u bytes", m_updateDownloaded, m_updateTotalSize);
+        LOG_ERROR(m_name, "Incomplete update: %u/%u bytes", m_updateDownloaded, m_updateTotalSize);
         failDownload("Incomplete update");
         return;
     }
 
-    LOG_INFO(TAG, "Success, rebooting...");
+    LOG_INFO(m_name, "Success, rebooting...");
+    m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = "ota/completed", .payload = "success"}});
     m_otaState = OtaState::Completed;
     m_progress = 100;
-    m_bus.publish(EventType::OtaCompleted);
     cleanupDownload();
     delay(100);
     ESP.restart();
@@ -455,11 +413,11 @@ void OtaService::completeDownload()
 
 void OtaService::failDownload(const char *reason)
 {
-    LOG_ERROR(TAG, "%s", reason);
-    Update.abort();
+    LOG_ERROR(m_name, "%s", reason);
+    Update.end(false);
     m_otaState = OtaState::Error;
     m_progress = 0;
-    m_bus.publish(EventType::OtaError);
+    m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = "ota/error", .payload = std::string("error: ") + reason}});
     cleanupDownload();
 }
 
@@ -472,7 +430,6 @@ void OtaService::cleanupDownload()
     m_updateTotalSize = 0;
     m_updateDownloaded = 0;
 }
-
 } // namespace isic
 
 #endif // ISIC_ENABLE_OTA

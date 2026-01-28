@@ -24,6 +24,9 @@ struct WiFiConfig
 
     std::string stationSsid{};
     std::string stationPassword{};
+#ifdef ISIC_WIFI_EDUROAM
+    std::string stationUsername{};
+#endif
     std::uint32_t stationConnectRetryDelayMs{kStationConnectRetryDelayMs};
     std::uint32_t stationConnectionTimeoutMs{kStationConnectionTimeoutMs};
     std::uint32_t stationFastReconnectIntervalMs{kStationFastReconnectIntervalMs};
@@ -44,6 +47,9 @@ struct WiFiConfig
     {
         stationSsid.clear();
         stationPassword.clear();
+#ifdef ISIC_WIFI_EDUROAM
+        stationUsername.clear();
+#endif
         stationConnectRetryDelayMs = kStationConnectRetryDelayMs;
         stationConnectionTimeoutMs = kStationConnectionTimeoutMs;
         stationFastReconnectIntervalMs = kStationFastReconnectIntervalMs;

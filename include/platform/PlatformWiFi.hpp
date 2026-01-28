@@ -12,6 +12,7 @@
 
 #include <Arduino.h>
 #include <cstdint>
+#include <cstring>
 
 // ============================================================================
 // ESP32 Implementation
@@ -22,6 +23,9 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <esp_wifi.h>
+#ifdef ISIC_WIFI_EDUROAM
+#include <esp_wpa2.h>
+#endif
 
 namespace isic::platform
 {
@@ -65,6 +69,15 @@ inline void wiFiPowerUp()
     // ESP32: WiFi will wake when we set mode back to STA
     // No additional action needed
 }
+#ifdef ISIC_WIFI_EDUROAM
+/**
+ * @brief Connect to a WPA2-Enterprise (Eduroam) network
+ */
+inline void connectEduroam(const char *ssid, const char *username, const char *password)
+{
+    WiFi.begin(ssid, WPA2_AUTH_PEAP, username, username, password);
+}
+#endif
 } // namespace isic::platform
 
 // ============================================================================
@@ -75,6 +88,11 @@ inline void wiFiPowerUp()
 
 #include <ESP8266WiFi.h>
 #include <user_interface.h> // ESP8266 low-level WiFi control (wifi_set_sleep_type)
+#ifdef ISIC_WIFI_EDUROAM
+extern "C" {
+#include "wpa2_enterprise.h"
+}
+#endif
 
 namespace isic::platform
 {
@@ -118,6 +136,37 @@ inline void wiFiPowerUp()
     WiFi.forceSleepWake();
     delay(1);
 }
+
+#ifdef ISIC_WIFI_EDUROAM
+/**
+ * @brief Connect to a WPA2-Enterprise (Eduroam) network
+ *
+ * ESP8266 requires low-level SDK calls instead of WiFi.begin()
+ * 
+ * @note is not really safe to call low Level SDK functions with external C linkage
+ */
+inline void connectEduroam(const char *ssid, const char *username, const char *password)
+{
+    wifi_set_opmode(STATION_MODE);
+
+    struct station_config wifi_config;
+    memset(&wifi_config, 0, sizeof(wifi_config));
+    strncpy(reinterpret_cast<char *>(wifi_config.ssid), ssid, sizeof(wifi_config.ssid) - 1);
+    wifi_station_set_config(&wifi_config);
+
+    wifi_station_clear_cert_key();
+    wifi_station_clear_enterprise_ca_cert();
+    wifi_station_set_wpa2_enterprise_auth(1);
+
+    const auto usernameLen{strlen(username)};
+    const auto passwordLen{strlen(password)};
+    wifi_station_set_enterprise_identity(reinterpret_cast<uint8 *>(const_cast<char *>(username)), usernameLen);
+    wifi_station_set_enterprise_username(reinterpret_cast<uint8 *>(const_cast<char *>(username)), usernameLen);
+    wifi_station_set_enterprise_password(reinterpret_cast<uint8 *>(const_cast<char *>(password)), passwordLen);
+
+    wifi_station_connect();
+}
+#endif
 } // namespace isic::platform
 
 #else
