@@ -452,6 +452,11 @@ void WiFiService::connectToStation()
     }
 
     WiFi.mode(WIFI_STA);
+    platform::setWiFiNormalPower();
+    if (m_config.stationPowerSaveEnabled)
+    {
+        platform::setWiFiLightSleep();
+    }
 
 #ifdef ISIC_WIFI_EDUROAM
     platform::connectEduroam(m_config.stationSsid.c_str(), m_config.stationUsername.c_str(), m_config.stationPassword.c_str());
@@ -732,6 +737,8 @@ void WiFiService::enterPowerSleep()
 {
     LOG_INFO(m_name, "WiFi entering power sleep");
 
+    m_lightSleepConfigured = false;
+
     if (m_wifiState == WiFiState::Connected || m_wifiState == WiFiState::Connecting)
     {
         WiFi.disconnect(true);
@@ -744,6 +751,7 @@ void WiFiService::enterPowerSleep()
 
     WiFi.mode(WIFI_OFF);
     platform::wiFiPowerDown();
+    m_powerSleepActive = true;
 
     LOG_INFO(m_name, "WiFi powered down");
 }
@@ -753,6 +761,8 @@ void WiFiService::wakeFromPowerSleep()
     LOG_INFO(m_name, "WiFi waking from power sleep");
 
     platform::wiFiPowerUp();
+    m_powerSleepActive = false;
+    m_lightSleepConfigured = false;
 
     if (m_config.isConfigured())
     {
@@ -780,21 +790,35 @@ void WiFiService::handlePowerStateChange(const Event &event)
     switch (power->targetState)
     {
         case PowerState::LightSleep: {
-            // Light sleep: configure WiFi for light sleep mode
-            platform::setWiFiLightSleep();
-            LOG_INFO(m_name, "WiFi configured for light sleep");
+            if (!m_powerSleepActive && m_wifiState == WiFiState::Connected)
+            {
+                platform::setWiFiLightSleep();
+                m_lightSleepConfigured = true;
+                LOG_INFO(m_name, "WiFi configured for reader light sleep");
+            }
             break;
         }
-        case PowerState::ModemSleep:
-        case PowerState::DeepSleep:
-        case PowerState::Hibernating: {
+        case PowerState::ModemSleep: {
             // Full sleep: disconnect and power down WiFi
-            enterPowerSleep();
+            if (!m_powerSleepActive)
+            {
+                enterPowerSleep();
+            }
             break;
         }
         case PowerState::Active: {
-            // Waking up: restore WiFi if was in modem sleep
-            if (power->previousState == PowerState::ModemSleep)
+            if (power->previousState == PowerState::LightSleep && m_lightSleepConfigured)
+            {
+                platform::setWiFiNormalPower();
+                if (m_config.stationPowerSaveEnabled)
+                {
+                    platform::setWiFiLightSleep();
+                }
+                m_lightSleepConfigured = false;
+                LOG_INFO(m_name, "WiFi restored after reader light sleep");
+            }
+
+            if (power->previousState == PowerState::ModemSleep && m_powerSleepActive)
             {
                 wakeFromPowerSleep();
             }

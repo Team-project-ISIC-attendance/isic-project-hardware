@@ -4,46 +4,18 @@
 #include "common/Config.hpp"
 #include "core/EventBus.hpp"
 #include "core/IService.hpp"
-#include "platform/PlatformWiFi.hpp"
+
+#include <array>
+#include <vector>
 
 namespace isic
 {
-
-class ConfigService;
-
-/**
- * @brief RTC memory structure for persistence across deep sleep
- *
- * ESP8266 has 512 bytes of RTC memory that survives deep sleep.
- * We use a small portion to track sleep state and wakeup count.
- */
-struct RtcData
-{
-    static constexpr std::uint32_t MAGIC{0x504F5752};
-
-    std::uint32_t magic{0};
-    std::uint32_t wakeupCount{0};
-    std::uint32_t totalSleepMs{0};
-    PowerState lastRequestedState{PowerState::Active};
-    std::uint32_t remainingSleepMs{0}; // For chained deep sleep
-    std::uint32_t crc32{0};
-
-    [[nodiscard]] bool isValid() const
-    {
-        return magic == MAGIC;
-    }
-    void invalidate()
-    {
-        magic = 0;
-    }
-};
-
 class PowerService : public ServiceBase
 {
 public:
     enum ActivityType : std::uint8_t
     {
-        CardScanned = (1 << 0), // Bit 0: Card scanned event
+        CardScanned = (1 << 0), // Bit 0: card scanned event
         MqttMessage = (1 << 1), // Bit 1: MQTT message received
         WifiConnected = (1 << 2), // Bit 2: WiFi connected
         MqttConnected = (1 << 3), // Bit 3: MQTT connected
@@ -58,7 +30,6 @@ public:
     PowerService(PowerService &&) = delete;
     PowerService &operator=(PowerService &&) = delete;
 
-    // IService implementation
     Status begin() override;
     void loop() override;
     void end() override;
@@ -67,22 +38,22 @@ public:
     {
         return m_currentState;
     }
+
     [[nodiscard]] WakeupReason getLastWakeupReason() const noexcept
     {
         return m_wakeupReason;
     }
+
     [[nodiscard]] std::uint32_t getTimeSinceLastActivityMs() const noexcept
     {
         return millis() - m_lastActivityMs;
     }
+
     [[nodiscard]] bool isSleepPending() const noexcept
     {
         return m_sleepPending;
     }
-    [[nodiscard]] std::uint32_t getWakeupCount() const noexcept
-    {
-        return m_metrics.wakeupCount;
-    }
+
     [[nodiscard]] const PowerMetrics &getMetrics() const noexcept
     {
         return m_metrics;
@@ -91,25 +62,37 @@ public:
     void requestSleep(PowerState state, std::uint32_t durationMs = 0);
     void cancelSleepRequest();
     void recordActivity();
+    void wakeToActive();
 
     void serializeMetrics(JsonObject &obj) const override
     {
         obj["state"] = toString(getState());
+        obj["power_state"] = toString(getCurrentState());
+        obj["pn532_target_mode"] = toString(m_pn532TargetMode);
         obj["last_wakeup_reason"] = toString(getLastWakeupReason());
         obj["time_since_last_activity_ms"] = getTimeSinceLastActivityMs();
-
-        obj["light_sleep_cycles"] = m_metrics.lightSleepCycles;
-        obj["modem_sleep_cycles"] = m_metrics.modemSleepCycles;
-        obj["deep_sleep_cycles"] = m_metrics.deepSleepCycles;
-
-        obj["wakeup_count"] = m_metrics.wakeupCount;
-        obj["smart_sleep_used"] = m_metrics.smartSleepUsed;
+        obj["light_sleep_entries"] = m_metrics.lightSleepEntries;
+        obj["modem_sleep_entries"] = m_metrics.modemSleepEntries;
+        obj["light_sleep_wakeups"] = m_metrics.lightSleepWakeups;
+        obj["modem_sleep_wakeups"] = m_metrics.modemSleepWakeups;
+        obj["burst_mode"] = m_burstMode;
+        obj["burst_entries"] = m_metrics.burstEntries;
+        obj["burst_exits"] = m_metrics.burstExits;
+        obj["sleep_blocked"] = m_metrics.sleepBlocked;
+        obj["sleep_blocked_ap"] = m_metrics.sleepBlockedByAp;
+        obj["sleep_blocked_ota"] = m_metrics.sleepBlockedByOta;
+        obj["sleep_suppressed_by_burst"] = m_metrics.sleepSuppressedByBurst;
         obj["network_aware_sleeps"] = m_metrics.networkAwareSleeps;
     }
 
 private:
-    void handleReadyState();
-    void handleRunningState();
+    enum class SleepBlockReason : std::uint8_t
+    {
+        None,
+        AccessPoint,
+        OtaUpdate,
+    };
+
     void handleWifiConnected(const Event &event);
     void handleWifiDisconnected(const Event &event);
     void handleMqttConnected(const Event &event);
@@ -117,32 +100,33 @@ private:
     void handleCardScanned(const Event &event);
     void handleMqttMessage(const Event &event);
     void handleNfcReady(const Event &event);
+    void handleWifiApStarted(const Event &event);
+    void handleWifiApStopped(const Event &event);
+    void handleOtaStarted(const Event &event);
+    void handleOtaCompleted(const Event &event);
+    void handleOtaError(const Event &event);
 
-    PowerState selectSmartSleepDepth();
-    [[nodiscard]] bool canEnterSleep() const;
-    [[nodiscard]] std::uint32_t estimateIdleDuration() const;
-
+    [[nodiscard]] bool canEnterSleep(PowerState state, SleepBlockReason *reason = nullptr) const;
+    void noteSleepBlocked(SleepBlockReason reason);
+    void evaluateIdleState();
+    void updateBurstState(std::uint32_t nowMs);
+    void recordCardActivity(std::uint32_t timestampMs);
+    [[nodiscard]] std::uint8_t countRecentCardScans(std::uint32_t nowMs) const;
+    [[nodiscard]] bool isReaderReadyHoldActive(std::uint32_t nowMs) const;
+    [[nodiscard]] bool shouldKeepEspAwakeForTraffic(std::uint32_t nowMs) const;
+    [[nodiscard]] PowerState computeDesiredEspState(std::uint32_t nowMs) const;
+    [[nodiscard]] Pn532PowerMode computeDesiredPn532Mode(std::uint32_t nowMs) const;
+    void updatePn532Target(Pn532PowerMode targetMode);
     void executePendingSleep();
 
-    void enterLightSleepAsync(std::uint32_t durationMs);
-    void enterModemSleepAsync(std::uint32_t durationMs);
-    void enterDeepSleepAsync(std::uint32_t durationMs);
-
-    void wakeFromModemSleep();
-
-    void checkIdleTimeout();
-    void checkChainedSleep();
+    void enterLightSleep();
+    void enterModemSleep();
 
     void prepareForSleep(PowerState state);
-    void notifyWakeup();
     [[nodiscard]] WakeupReason detectWakeupReason();
 
-    void saveToRtcMemory();
-    bool loadFromRtcMemory();
-    [[nodiscard]] std::uint32_t calculateCrc32(const RtcData &data);
-
-    void publishStateChange(PowerState newState, PowerState oldState);
-    void publishSleepRequested(PowerState state, uint32_t durationMs);
+    void publishStateChange(PowerState newState, PowerState oldState, Pn532PowerMode pn532TargetMode);
+    void publishSleepRequested(PowerState state, std::uint32_t durationMs);
     void publishWakeupOccurred(WakeupReason reason);
 
     void recordActivityInternal(ActivityType type);
@@ -151,34 +135,28 @@ private:
     EventBus &m_bus;
     const PowerConfig &m_config;
 
-    bool m_wifiReady{false}; // Set by WifiConnected/Disconnected events
-    bool m_mqttReady{false}; // Set by MqttConnected/Disconnected events
+    bool m_wifiReady{false};
+    bool m_mqttReady{false};
+    bool m_apModeActive{false};
+    bool m_otaUpdateActive{false};
+    bool m_burstMode{false};
+    bool m_burstSleepSuppressionActive{false};
 
     PowerState m_currentState{PowerState::Active};
+    Pn532PowerMode m_pn532TargetMode{Pn532PowerMode::ActiveScan};
     WakeupReason m_wakeupReason{WakeupReason::Unknown};
-
     PowerMetrics m_metrics{};
-
     std::uint32_t m_lastActivityMs{0};
+    std::uint32_t m_lastCardActivityMs{0};
 
-    // Sleep request state
     bool m_sleepPending{false};
     PowerState m_pendingSleepState{PowerState::Active};
     std::uint32_t m_pendingSleepDurationMs{0};
     std::uint32_t m_sleepRequestedAtMs{0};
 
-    // Light sleep state machine
-    bool m_lightSleepActive{false};
-    std::uint32_t m_lightSleepStartMs{0};
-    std::uint32_t m_lightSleepDurationMs{0};
-
-    // Modem sleep state
-    bool m_modemSleepActive{false};
-    std::uint32_t m_modemSleepStartMs{0};
-    std::uint32_t m_modemSleepDurationMs{0};
-
-    // RTC data for deep sleep persistence
-    RtcData rtcData_{};
+    static constexpr std::size_t kRecentCardHistorySize{16};
+    std::array<std::uint32_t, kRecentCardHistorySize> m_recentCardScanMs{};
+    std::size_t m_recentCardScanIndex{0};
 
     std::vector<EventBus::ScopedConnection> eventConnections_;
 };

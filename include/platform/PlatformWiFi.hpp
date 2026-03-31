@@ -48,6 +48,11 @@ inline void setWiFiLightSleep()
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 }
 
+inline void setWiFiNormalPower()
+{
+    esp_wifi_set_ps(WIFI_PS_NONE);
+}
+
 /**
  * @brief Power down WiFi subsystem
  *
@@ -113,6 +118,11 @@ inline bool isNetworkSecure(const std::uint8_t networkIndex)
 inline void setWiFiLightSleep()
 {
     wifi_set_sleep_type(LIGHT_SLEEP_T);
+}
+
+inline void setWiFiNormalPower()
+{
+    wifi_set_sleep_type(NONE_SLEEP_T);
 }
 
 /**

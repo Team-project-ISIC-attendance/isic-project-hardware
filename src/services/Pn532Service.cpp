@@ -2,6 +2,8 @@
 
 #include "common/Logger.hpp"
 
+#include <algorithm>
+
 namespace isic
 {
 void IRAM_ATTR Pn532Service::isrTrampoline()
@@ -11,6 +13,7 @@ void IRAM_ATTR Pn532Service::isrTrampoline()
         s_activeInstance->m_irqTriggered.store(true, std::memory_order_relaxed);
     }
 }
+
 Pn532Service::Pn532Service(EventBus &bus, ConfigService &configService)
     : ServiceBase("Pn532Service")
     , m_bus(bus)
@@ -18,7 +21,6 @@ Pn532Service::Pn532Service(EventBus &bus, ConfigService &configService)
     , m_config(m_configService.getPn532Config())
 {
     m_eventConnections.reserve(1);
-
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::PowerStateChange, [this](const Event &e) {
         if (const auto *power = e.get<PowerEvent>())
         {
@@ -56,6 +58,10 @@ Status Pn532Service::begin()
     // Decide between IRQ mode (zero overhead) or polling mode (fallback)
     m_useIrqMode = m_config.useIrq();
     m_pollIntervalMs = m_config.pollIntervalMs ? m_config.pollIntervalMs : Pn532Config::kDefaultReadTimeoutMs;
+    m_powerState = PowerState::Active;
+    m_targetPowerMode = Pn532PowerMode::ActiveScan;
+    m_powerMode = Pn532PowerMode::ActiveScan;
+    m_wakeRetryAtMs = 0;
 
     // IMPORTANT: For IRQ mode, configure the IRQ pin BEFORE SAMConfig
     // SAMConfig generates an initial IRQ pulse that we need to ignore
@@ -88,34 +94,31 @@ Status Pn532Service::begin()
     {
         // Configure IRQ pin for reading
         pinMode(m_config.irqPin, INPUT_PULLUP);
-
         // Enable IRQ-based wakeup if configured for power management
-        if (const auto &powerConfig = m_configService.getPowerConfig();
-            powerConfig.enableNfcWakeup && powerConfig.nfcWakeupPin != 0xFF)
+        const auto &powerConfig = m_configService.getPowerConfig();
+        if (powerConfig.nfcWakeupPin != 0xFF && powerConfig.nfcWakeupPin != m_config.irqPin)
         {
-            if (powerConfig.nfcWakeupPin != m_config.irqPin)
-            {
-                LOG_WARN(m_name, "NFC wakeup pin GPIO%d != PN532 IRQ pin GPIO%d",
-                         powerConfig.nfcWakeupPin,
-                         m_config.irqPin);
-            }
-            if (enableIrqWakeup())
-            {
-                LOG_INFO(m_name, "PN532 IRQ wakeup enabled on GPIO%d", powerConfig.nfcWakeupPin);
-            }
-            else
-            {
-                LOG_WARN(m_name, "Failed to enable PN532 IRQ wakeup");
-            }
+            LOG_WARN(m_name, "NFC wakeup pin GPIO%d != PN532 IRQ pin GPIO%d",
+                     powerConfig.nfcWakeupPin,
+                     m_config.irqPin);
+        }
+
+        if (enableIrqWakeup())
+        {
+            LOG_INFO(m_name, "PN532 IRQ wakeup enabled on GPIO%d", m_config.irqPin);
+        }
+        else
+        {
+            LOG_WARN(m_name, "Failed to enable PN532 IRQ wakeup");
         }
 
         // Initialize IRQ state tracking
         m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
-        LOG_INFO(m_name, "Using IRQ polling mode on GPIO%d (initial state: %s)",
-                 m_config.irqPin, m_irqCurr == HIGH ? "HIGH" : "LOW");
+        LOG_INFO(m_name, "Using IRQ reader mode on GPIO%d (initial state: %s)",
+                 m_config.irqPin,
+                 m_irqCurr == HIGH ? "HIGH" : "LOW");
     }
-
-    if (!m_useIrqMode)
+    else
     {
         LOG_INFO(m_name, "Using polling mode (interval: %lums)", m_pollIntervalMs);
     }
@@ -126,7 +129,67 @@ Status Pn532Service::begin()
 
 void Pn532Service::loop()
 {
-    if (m_pn532State != Pn532State::Ready || getState() != ServiceState::Running)
+    if (getState() != ServiceState::Running || !m_pn532 || m_pn532State == Pn532State::Error)
+    {
+        return;
+    }
+
+    const auto now{millis()};
+
+    if (m_powerMode == Pn532PowerMode::Recovering)
+    {
+        if (now < m_wakeRetryAtMs)
+        {
+            return;
+        }
+
+        LOG_INFO(m_name, "Retrying PN532 after wake failure backoff");
+        m_powerMode = m_isAsleep ? Pn532PowerMode::PowerDown : Pn532PowerMode::ActiveScan;
+    }
+
+    if (m_targetPowerMode == Pn532PowerMode::PowerDown && shouldSleepBetweenScans())
+    {
+        if (!m_isAsleep)
+        {
+            if (!shouldDelaySleepAfterRead(now))
+            {
+                enterSleep();
+                return;
+            }
+        }
+        else if (m_useIrqMode)
+        {
+            m_irqCurr = digitalRead(m_config.irqPin);
+            if (m_irqCurr == LOW && m_irqPrev == HIGH)
+            {
+                LOG_DEBUG(m_name, "Got NFC IRQ while reader asleep");
+                handleWakeRead();
+            }
+            m_irqPrev = m_irqCurr;
+        }
+        else
+        {
+            pollWhileAsleep();
+        }
+
+        if (m_isAsleep)
+        {
+            return;
+        }
+    }
+
+    if (m_isAsleep)
+    {
+        if (!wakeup())
+        {
+            enterRecovering(now);
+            return;
+        }
+    }
+
+    m_powerMode = Pn532PowerMode::ActiveScan;
+
+    if (m_pn532State != Pn532State::Ready)
     {
         return;
     }
@@ -157,9 +220,9 @@ void Pn532Service::loop()
     {
         // Polling mode: directly poll at configured interval
         if (millis() - m_lastPollMs >= m_pollIntervalMs)
-        {
-            m_lastPollMs = millis();
-            pollForCard();
+    {
+        m_lastPollMs = millis();
+        pollForCard();
         }
     }
 }
@@ -168,7 +231,10 @@ void Pn532Service::end()
 {
     m_pn532State = Pn532State::Disabled;
     m_detectionStarted = false;
+    m_isAsleep = false;
+    m_powerMode = Pn532PowerMode::PowerDown;
     m_irqPrev = m_irqCurr = HIGH;
+    m_eventConnections.clear();
     setState(ServiceState::Stopped);
 }
 
@@ -265,26 +331,87 @@ void Pn532Service::handleCardDetected()
         ++m_metrics.readErrors;
         ++m_consecutiveErrors;
     }
-    m_detectionStarted = false; // Restart detection for next card
+    m_detectionStarted = false;  // Restart detection for next card
 }
 
-void Pn532Service::publishCardEvent(const std::uint8_t* uid, std::uint8_t uidLength)
+void Pn532Service::handleWakeRead()
+{
+    ++m_metrics.irqWakeups;
+
+    if (!wakeup())
+    {
+        enterRecovering(millis());
+        return;
+    }
+
+    std::uint8_t uid[7]{};
+    std::uint8_t uidLength{};
+    if (m_pn532->readDetectedPassiveTargetID(uid, &uidLength))
+    {
+        ++m_metrics.sleepWakeReads;
+        publishCardEvent(uid, uidLength);
+    }
+    else
+    {
+        ++m_metrics.readErrors;
+        ++m_metrics.wakeReadFailures;
+        ++m_consecutiveErrors;
+    }
+
+    m_detectionStarted = false;
+}
+
+
+void Pn532Service::pollWhileAsleep()
+{
+    if (millis() - m_lastPollMs < m_pollIntervalMs)
+    {
+        return;
+    }
+
+    m_lastPollMs = millis();
+    if (!wakeup())
+    {
+        enterRecovering(millis());
+        return;
+    }
+
+    std::uint8_t uid[7]{};
+    std::uint8_t uidLength{};
+    if (m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, m_config.readTimeoutMs))
+    {
+        ++m_metrics.sleepWakeReads;
+        publishCardEvent(uid, uidLength);
+        return;
+    }
+
+    if (shouldSleepBetweenScans())
+    {
+        enterSleep();
+    }
+}
+
+void Pn532Service::publishCardEvent(const std::uint8_t *uid, const std::uint8_t uidLength)
 {
     const auto len = std::min<std::size_t>(uidLength, 7);
     std::copy_n(uid, len, m_lastCardUid.begin());
 
+    ++m_metrics.cardsRead;
     ++m_metrics.successfulReads;
+    m_consecutiveErrors = 0;
     m_lastCardUidLength = uidLength;
     m_lastCardReadMs = millis();
 
     LOG_DEBUG(m_name, "Card: %s", cardUidToString(m_lastCardUid, uidLength).c_str());
-
+    m_targetPowerMode = Pn532PowerMode::ActiveScan;
+    m_powerMode = Pn532PowerMode::ActiveScan;
+    m_wakeRetryAtMs = 0;
     m_bus.publish({EventType::CardScanned, CardEvent{.timestampMs = m_lastCardReadMs, .uid = m_lastCardUid}});
 }
 
 bool Pn532Service::enterSleep()
 {
-    if (!m_pn532 || m_pn532State == Pn532State::Error)
+    if (!m_pn532 || m_pn532State != Pn532State::Ready)
     {
         LOG_WARN(m_name, "Cannot enter sleep: PN532 not ready");
         return false;
@@ -292,7 +419,7 @@ bool Pn532Service::enterSleep()
 
     if (m_isAsleep)
     {
-        return true; // Already asleep
+        return true;  // Already asleep
     }
 
     LOG_INFO(m_name, "Putting PN532 into sleep mode");
@@ -343,7 +470,18 @@ bool Pn532Service::enterSleep()
     // - Call wakeup() after ESP32 wakes to restore PN532 to normal operation
 
     m_isAsleep = true;
+    m_detectionStarted = false;
     m_pn532State = Pn532State::Disabled;
+    m_powerMode = Pn532PowerMode::PowerDown;
+    ++m_metrics.sleepEntries;
+    if (m_powerState == PowerState::Active)
+    {
+        ++m_metrics.earlySleepEntries;
+    }
+    if (m_useIrqMode)
+    {
+        m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
+    }
 
     LOG_INFO(m_name, "PN532 entered PowerDown mode (wakeup: 0x%02X)", wakeupSources);
     return true;
@@ -380,7 +518,9 @@ bool Pn532Service::wakeup()
     const auto version = m_pn532->getFirmwareVersion();
     if (!version)
     {
+        ++m_metrics.wakeFailures;
         LOG_ERROR(m_name, "PN532 wakeup failed - no firmware version response");
+        
         // Don't update state - still considered asleep
         return false;
     }
@@ -388,6 +528,14 @@ bool Pn532Service::wakeup()
     // PN532 successfully woke up and is responding
     m_isAsleep = false;
     m_pn532State = Pn532State::Ready;
+    m_detectionStarted = false;
+    m_powerMode = Pn532PowerMode::ActiveScan;
+    m_wakeRetryAtMs = 0;
+    if (m_useIrqMode)
+    {
+        pinMode(m_config.irqPin, INPUT_PULLUP);
+        m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
+    }
 
     LOG_INFO(m_name, "PN532 woke from PowerDown successfully (FW: 0x%08X)", version);
     return true;
@@ -400,6 +548,7 @@ bool Pn532Service::enableIrqWakeup()
         return false;
     }
 
+    pinMode(m_config.irqPin, INPUT_PULLUP);
     LOG_INFO(m_name, "Enabling PN532 IRQ wakeup on card detection");
 
     // TODO: need check this impl is correct
@@ -450,6 +599,24 @@ void Pn532Service::disableIrqWakeup()
     LOG_INFO(m_name, "IRQ wakeup disabled");
 }
 
+bool Pn532Service::shouldSleepBetweenScans() const
+{
+    return m_configService.getPowerConfig().pn532SleepBetweenScans;
+}
+
+bool Pn532Service::shouldDelaySleepAfterRead(const std::uint32_t nowMs) const
+{
+    return (nowMs - m_lastCardReadMs) < m_configService.getPowerConfig().readerReadyHoldMs;
+}
+
+void Pn532Service::enterRecovering(const std::uint32_t nowMs)
+{
+    m_powerMode = Pn532PowerMode::Recovering;
+    m_wakeRetryAtMs = nowMs + m_config.recoveryDelayMs;
+    ++m_metrics.recoveryAttempts;
+    LOG_WARN(m_name, "PN532 entering recovery backoff for %lums", m_config.recoveryDelayMs);
+}
+
 bool Pn532Service::reinitializePn532()
 {
     if (!m_pn532)
@@ -479,8 +646,16 @@ bool Pn532Service::reinitializePn532()
     // NOTE: We intentionally skip setPassiveActivationRetries() here.
     // The Adafruit library doesn't read the response frame, leaving IRQ stuck LOW.
     // Default retry settings work fine for both polling and IRQ modes.
+    
+    if (m_useIrqMode)
+    {
+        m_irqWakeupEnabled = enableIrqWakeup();
+    }
 
+    m_isAsleep = false;
     m_pn532State = Pn532State::Ready;
+    m_powerMode = Pn532PowerMode::ActiveScan;
+    m_wakeRetryAtMs = 0;
     return true;
 }
 
@@ -499,7 +674,7 @@ bool Pn532Service::recoverIrqMode()
     return true;
 }
 
-bool Pn532Service::waitForIrqHigh(std::uint32_t timeoutMs)
+bool Pn532Service::waitForIrqHigh(const std::uint32_t timeoutMs)
 {
     // Wait for IRQ pin to go HIGH (idle state)
     // The PN532 pulls IRQ LOW when it has data ready or during certain operations
@@ -527,6 +702,7 @@ bool Pn532Service::attachIrqInterrupt()
         m_irqTriggered.store(false, std::memory_order_relaxed);
         return false;
     }
+
     s_activeInstance = this;
     attachInterrupt(digitalPinToInterrupt(m_config.irqPin), isrTrampoline, FALLING);
     m_irqTriggered.store(false, std::memory_order_relaxed);
@@ -544,27 +720,32 @@ void Pn532Service::detachIrqInterrupt()
 
 void Pn532Service::handlePowerStateChange(const PowerEvent &power)
 {
+    m_powerState = power.targetState;
+    m_targetPowerMode = power.pn532TargetMode;
     LOG_DEBUG(m_name, "PN532 power state change: %s -> %s", toString(power.previousState), toString(power.targetState));
 
-    switch (power.targetState)
+    switch (m_targetPowerMode)
     {
-        case PowerState::LightSleep:
-        case PowerState::ModemSleep:
-        case PowerState::DeepSleep:
-        case PowerState::Hibernating:
-            // Enter PN532 low-power sleep mode
-            if (m_pn532State == Pn532State::Ready)
+        case Pn532PowerMode::PowerDown:
+            if (shouldSleepBetweenScans() && m_pn532State == Pn532State::Ready && !shouldDelaySleepAfterRead(millis()))
             {
                 enterSleep();
             }
             break;
 
-        case PowerState::Active:
-            // Wake PN532 if it was sleeping
+        case Pn532PowerMode::ActiveScan:
             if (m_isAsleep)
             {
-                wakeup();
+                if (!wakeup())
+                {
+                    enterRecovering(millis());
+                }
             }
+            m_detectionStarted = false;
+            break;
+
+        case Pn532PowerMode::Recovering:
+            enterRecovering(millis());
             break;
 
         default:
