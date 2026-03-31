@@ -87,10 +87,15 @@ enum class OtaState : std::uint8_t
 enum class PowerState : std::uint8_t
 {
     Active, // Full power
-    LightSleep, // CPU paused, WiFi connected
-    ModemSleep, // WiFi RF off, CPU running
-    DeepSleep, // RTC only (~20µA)
-    Hibernating, // Extended deep sleep
+    LightSleep, // Reader idle, PN532 sleeping, WiFi still associated when possible
+    ModemSleep, // Reader idle, PN532 sleeping, WiFi powered down
+};
+
+enum class Pn532PowerMode : std::uint8_t
+{
+    ActiveScan,
+    PowerDown,
+    Recovering,
 };
 
 enum class WakeupReason : std::uint8_t
@@ -152,6 +157,12 @@ enum class EventType : std::uint8_t
     AttendanceRecorded,
     AttendanceError,
 
+    // OTA
+    OtaStarted,
+    OtaProgress,
+    OtaCompleted,
+    OtaError,
+
     // Feedback
     FeedbackRequest,
 
@@ -196,13 +207,15 @@ inline constexpr const char *kPn532StateNames[]{"uninitialized", "ready", "readi
 
 inline constexpr const char *kOtaStateNames[]{"idle", "checking", "downloading", "completed", "error"};
 
-inline constexpr const char *kPowerStateNames[]{"active", "light_sleep", "modem_sleep", "deep_sleep", "hibernating"};
+inline constexpr const char *kPowerStateNames[]{"active", "light_sleep", "modem_sleep"};
+
+inline constexpr const char *kPn532PowerModeNames[]{"active_scan", "power_down", "recovering"};
 
 inline constexpr const char *kWakeupReasonNames[]{"power_on", "timer", "external", "watchdog", "unknown"};
 
 inline constexpr const char *kFeedbackSignalNames[]{"none", "success", "error", "processing", "connected", "disconnected", "ota_start", "ota_complete"};
 
-inline constexpr const char *kEventTypeNames[]{"none", "system_ready", "system_error", "config_changed", "config_error", "wifi_connected", "wifi_disconnected", "wifi_error", "wifi_ap_started", "wifi_ap_stopped", "wifi_ap_error", "wifi_ap_client", "mqtt_connected", "mqtt_disconnected", "mqtt_error", "mqtt_message", "mqtt_publish_req", "mqtt_subscribe_req", "nfc_ready", "card_scanned", "card_removed", "nfc_error", "attendance_recorded", "attendance_error", "ota_started", "ota_progress", "ota_completed", "ota_error", "feedback_request", "health_changed", "power_state_change", "sleep_requested", "wakeup_occurred"};
+inline constexpr const char *kEventTypeNames[]{"none", "system_ready", "system_error", "config_changed", "config_error", "wifi_connected", "wifi_disconnected", "wifi_ap_started", "wifi_ap_stopped", "wifi_ap_error", "wifi_ap_client", "mqtt_connected", "mqtt_disconnected", "mqtt_error", "mqtt_message", "mqtt_publish_req", "mqtt_subscribe_req", "nfc_ready", "card_scanned", "card_removed", "nfc_error", "attendance_recorded", "attendance_error", "ota_started", "ota_progress", "ota_completed", "ota_error", "feedback_request", "health_changed", "power_state_change", "sleep_requested", "wakeup_occurred"};
 
 inline constexpr const char *kStatusCodeNames[]{"ok", "error", "timeout", "not_ready", "invalid_arg", "no_memory", "not_found", "busy"};
 
@@ -221,6 +234,7 @@ constexpr const char *toString(const MqttState state) { return detail::enumToStr
 constexpr const char *toString(const Pn532State state) { return detail::enumToString(state, detail::kPn532StateNames); }
 constexpr const char *toString(const OtaState state) { return detail::enumToString(state, detail::kOtaStateNames); }
 constexpr const char *toString(const PowerState state) { return detail::enumToString(state, detail::kPowerStateNames); }
+constexpr const char *toString(const Pn532PowerMode state) { return detail::enumToString(state, detail::kPn532PowerModeNames); }
 constexpr const char *toString(const WakeupReason state) { return detail::enumToString(state, detail::kWakeupReasonNames); }
 constexpr const char *toString(const FeedbackSignal signal) { return detail::enumToString(signal, detail::kFeedbackSignalNames); }
 constexpr const char *toString(const EventType type) { return detail::enumToString(type, detail::kEventTypeNames); }
@@ -316,8 +330,8 @@ struct PowerEvent
     std::uint32_t durationMs{0};
     PowerState targetState{PowerState::Active};
     PowerState previousState{PowerState::Active};
+    Pn532PowerMode pn532TargetMode{Pn532PowerMode::ActiveScan};
     WakeupReason wakeupReason{WakeupReason::Unknown};
-    // 1 byte padding
 };
 static_assert(sizeof(PowerEvent) == 8, "PowerEvent size changed");
 
@@ -394,15 +408,26 @@ struct Pn532Metrics
     std::uint32_t readErrors{0};
     std::uint32_t successfulReads{0};
     std::uint32_t recoveryAttempts{0};
+    std::uint32_t sleepEntries{0};
+    std::uint32_t earlySleepEntries{0};
+    std::uint32_t irqWakeups{0};
+    std::uint32_t wakeFailures{0};
+    std::uint32_t sleepWakeReads{0};
+    std::uint32_t wakeReadFailures{0};
 };
 
 struct PowerMetrics
 {
-    std::uint32_t lightSleepCycles{0};
-    std::uint32_t modemSleepCycles{0};
-    std::uint32_t deepSleepCycles{0};
-    std::uint32_t wakeupCount{0};
-    std::uint32_t smartSleepUsed{0};
+    std::uint32_t lightSleepEntries{0};
+    std::uint32_t modemSleepEntries{0};
+    std::uint32_t lightSleepWakeups{0};
+    std::uint32_t modemSleepWakeups{0};
+    std::uint32_t burstEntries{0};
+    std::uint32_t burstExits{0};
+    std::uint32_t sleepBlocked{0};
+    std::uint32_t sleepBlockedByAp{0};
+    std::uint32_t sleepBlockedByOta{0};
+    std::uint32_t sleepSuppressedByBurst{0};
     std::uint32_t networkAwareSleeps{0};
 };
 

@@ -151,21 +151,19 @@ void serializeOtaConfig(const JsonObject &ota, const OtaConfig &otaConfig)
 
 void serializePowerConfig(const JsonObject &power, const PowerConfig &powerConfig)
 {
-    power["sleepIntervalMs"] = powerConfig.sleepIntervalMs;
-    power["maxDeepSleepMs"] = powerConfig.maxDeepSleepMs;
-    power["lightSleepDurationMs"] = powerConfig.lightSleepDurationMs;
-    power["idleTimeoutMs"] = powerConfig.idleTimeoutMs;
-    power["enableTimerWakeup"] = powerConfig.enableTimerWakeup;
+    power["readerIdleTimeoutMs"] = powerConfig.readerIdleTimeoutMs;
+    power["modemSleepAfterMs"] = powerConfig.modemSleepAfterMs;
+    power["pn532SleepAfterMs"] = powerConfig.pn532SleepAfterMs;
+    power["readerReadyHoldMs"] = powerConfig.readerReadyHoldMs;
+    power["burstWindowMs"] = powerConfig.burstWindowMs;
+    power["burstScanCount"] = powerConfig.burstScanCount;
+    power["burstHoldMs"] = powerConfig.burstHoldMs;
     power["enableNfcWakeup"] = powerConfig.enableNfcWakeup;
     power["nfcWakeupPin"] = powerConfig.nfcWakeupPin;
     power["autoSleepEnabled"] = powerConfig.autoSleepEnabled;
     power["disableWiFiDuringSleep"] = powerConfig.disableWiFiDuringSleep;
     power["pn532SleepBetweenScans"] = powerConfig.pn532SleepBetweenScans;
-    power["smartSleepEnabled"] = powerConfig.smartSleepEnabled;
     power["modemSleepOnMqttDisconnect"] = powerConfig.modemSleepOnMqttDisconnect;
-    power["modemSleepDurationMs"] = powerConfig.modemSleepDurationMs;
-    power["smartSleepShortThresholdMs"] = powerConfig.smartSleepShortThresholdMs;
-    power["smartSleepMediumThresholdMs"] = powerConfig.smartSleepMediumThresholdMs;
     power["activityTypeMask"] = powerConfig.activityTypeMask;
 }
 
@@ -427,22 +425,22 @@ bool deserializePowerConfig(const JsonVariant &json, PowerConfig &powerConfig)
 
     auto changed{false};
 
-    PARSE_NUM(json, "sleepIntervalMs", powerConfig.sleepIntervalMs);
-    PARSE_NUM(json, "maxDeepSleepMs", powerConfig.maxDeepSleepMs);
-    PARSE_NUM(json, "lightSleepDurationMs", powerConfig.lightSleepDurationMs);
-    PARSE_NUM(json, "idleTimeoutMs", powerConfig.idleTimeoutMs);
-    PARSE_BOOL(json, "enableTimerWakeup", powerConfig.enableTimerWakeup);
+    PARSE_NUM(json, "readerIdleTimeoutMs", powerConfig.readerIdleTimeoutMs);
+    PARSE_NUM(json, "modemSleepAfterMs", powerConfig.modemSleepAfterMs);
+    PARSE_NUM(json, "pn532SleepAfterMs", powerConfig.pn532SleepAfterMs);
+    PARSE_NUM(json, "readerReadyHoldMs", powerConfig.readerReadyHoldMs);
+    PARSE_NUM(json, "burstWindowMs", powerConfig.burstWindowMs);
+    PARSE_NUM(json, "burstScanCount", powerConfig.burstScanCount);
+    PARSE_NUM(json, "burstHoldMs", powerConfig.burstHoldMs);
     PARSE_BOOL(json, "enableNfcWakeup", powerConfig.enableNfcWakeup);
     PARSE_NUM(json, "nfcWakeupPin", powerConfig.nfcWakeupPin);
     PARSE_BOOL(json, "autoSleepEnabled", powerConfig.autoSleepEnabled);
     PARSE_BOOL(json, "disableWiFiDuringSleep", powerConfig.disableWiFiDuringSleep);
     PARSE_BOOL(json, "pn532SleepBetweenScans", powerConfig.pn532SleepBetweenScans);
-    PARSE_BOOL(json, "smartSleepEnabled", powerConfig.smartSleepEnabled);
     PARSE_BOOL(json, "modemSleepOnMqttDisconnect", powerConfig.modemSleepOnMqttDisconnect);
-    PARSE_NUM(json, "modemSleepDurationMs", powerConfig.modemSleepDurationMs);
-    PARSE_NUM(json, "smartSleepShortThresholdMs", powerConfig.smartSleepShortThresholdMs);
-    PARSE_NUM(json, "smartSleepMediumThresholdMs", powerConfig.smartSleepMediumThresholdMs);
     PARSE_NUM(json, "activityTypeMask", powerConfig.activityTypeMask);
+    PARSE_NUM(json, "idleTimeoutMs", powerConfig.readerIdleTimeoutMs);
+    PARSE_NUM(json, "smartSleepMediumThresholdMs", powerConfig.modemSleepAfterMs);
 
     return changed;
 }

@@ -95,6 +95,8 @@ private:
     bool m_inSlowRetryMode{false};
     bool m_hasEverConnected{false};
     bool m_apActive{false};
+    bool m_powerSleepActive{false};
+    bool m_lightSleepConfigured{false};
     bool m_timeSyncStarted{false};
 
     WiFiMetrics m_metrics{};

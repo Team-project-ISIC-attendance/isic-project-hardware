@@ -355,38 +355,34 @@ struct PowerConfig
         static constexpr auto kSleepDelayMs{100};
     };
 
-    static constexpr auto kDefaultDeepSleepDurationMs{300'000}; // 5 minutes
-    static constexpr auto kDefaultMaxDeepSleepMs{3'500'000}; // ~58 min (ESP8266 limit)
-    static constexpr auto kDefaultLightSleepDurationMs{10'000}; // 10 seconds
-    static constexpr auto kDefaultIdleTimeoutMs{60'000}; // 1 minute
-    static constexpr auto kDefaultEnableTimerWakeup{true};
-    static constexpr auto kDefaultEnableNfcWakeup{false};
-    static constexpr auto kDefaultNfcWakeupPin{4}; // GPIO4 for PN532 IRQ
+    static constexpr auto kDefaultReaderIdleTimeoutMs{30'000}; // 30 seconds
+    static constexpr auto kDefaultModemSleepAfterMs{300'000}; // 5 minutes
+    static constexpr auto kDefaultPn532SleepAfterMs{10'000}; // 10 seconds
+    static constexpr auto kDefaultReaderReadyHoldMs{5'000}; // 5 seconds
+    static constexpr auto kDefaultBurstWindowMs{15'000}; // 15 seconds
+    static constexpr auto kDefaultBurstScanCount{3};
+    static constexpr auto kDefaultBurstHoldMs{45'000}; // 45 seconds
+    static constexpr auto kDefaultEnableNfcWakeup{true};
+    static constexpr auto kDefaultNfcWakeupPin{Pn532Config::kDefaultIrqPin};
     static constexpr auto kDefaultAutoSleepEnabled{false};
     static constexpr auto kDefaultDisableWiFiDuringSleep{true};
     static constexpr auto kDefaultPn532SleepBetweenScans{true};
-    static constexpr auto kDefaultSmartSleepEnabled{true};
     static constexpr auto kDefaultModemSleepOnMqttDisconnect{true};
-    static constexpr auto kDefaultModemSleepDurationMs{30'000}; // 30 seconds
-    static constexpr auto kDefaultSmartSleepShortThresholdMs{30'000}; // <30s = light sleep
-    static constexpr auto kDefaultSmartSleepMediumThresholdMs{300'000}; // <5m = modem, >5m = deep
-    static constexpr auto kDefaultActivityTypeMask{0b00111}; // Card, MQTT msg, WiFi. Activity type bitmask - which events reset idle timer Bit 0: CardScanned, Bit 1: MqttMessage, Bit 2: WifiConnected, Bit 3: MqttConnected, Bit 4: NfcReady
+    static constexpr auto kDefaultActivityTypeMask{0b00001}; // Card only by default
 
-    std::uint32_t sleepIntervalMs{kDefaultDeepSleepDurationMs};
-    std::uint32_t maxDeepSleepMs{kDefaultMaxDeepSleepMs};
-    std::uint32_t lightSleepDurationMs{kDefaultLightSleepDurationMs};
-    std::uint32_t idleTimeoutMs{kDefaultIdleTimeoutMs};
-    std::uint32_t modemSleepDurationMs{kDefaultModemSleepDurationMs};
-    std::uint32_t smartSleepShortThresholdMs{kDefaultSmartSleepShortThresholdMs};
-    std::uint32_t smartSleepMediumThresholdMs{kDefaultSmartSleepMediumThresholdMs};
+    std::uint32_t readerIdleTimeoutMs{kDefaultReaderIdleTimeoutMs};
+    std::uint32_t modemSleepAfterMs{kDefaultModemSleepAfterMs};
+    std::uint32_t pn532SleepAfterMs{kDefaultPn532SleepAfterMs};
+    std::uint32_t readerReadyHoldMs{kDefaultReaderReadyHoldMs};
+    std::uint32_t burstWindowMs{kDefaultBurstWindowMs};
+    std::uint32_t burstHoldMs{kDefaultBurstHoldMs};
     std::uint8_t nfcWakeupPin{kDefaultNfcWakeupPin};
     std::uint8_t activityTypeMask{kDefaultActivityTypeMask};
-    bool enableTimerWakeup{kDefaultEnableTimerWakeup};
+    std::uint8_t burstScanCount{kDefaultBurstScanCount};
     bool enableNfcWakeup{kDefaultEnableNfcWakeup};
     bool autoSleepEnabled{kDefaultAutoSleepEnabled};
     bool disableWiFiDuringSleep{kDefaultDisableWiFiDuringSleep};
     bool pn532SleepBetweenScans{kDefaultPn532SleepBetweenScans};
-    bool smartSleepEnabled{kDefaultSmartSleepEnabled};
     bool modemSleepOnMqttDisconnect{kDefaultModemSleepOnMqttDisconnect};
 
     [[nodiscard]] constexpr bool isConfigured() const // NOLINT
@@ -396,21 +392,19 @@ struct PowerConfig
 
     constexpr void restoreDefaults()
     {
-        sleepIntervalMs = kDefaultDeepSleepDurationMs;
-        maxDeepSleepMs = kDefaultMaxDeepSleepMs;
-        lightSleepDurationMs = kDefaultLightSleepDurationMs;
-        idleTimeoutMs = kDefaultIdleTimeoutMs;
-        enableTimerWakeup = kDefaultEnableTimerWakeup;
+        readerIdleTimeoutMs = kDefaultReaderIdleTimeoutMs;
+        modemSleepAfterMs = kDefaultModemSleepAfterMs;
+        pn532SleepAfterMs = kDefaultPn532SleepAfterMs;
+        readerReadyHoldMs = kDefaultReaderReadyHoldMs;
+        burstWindowMs = kDefaultBurstWindowMs;
+        burstHoldMs = kDefaultBurstHoldMs;
         enableNfcWakeup = kDefaultEnableNfcWakeup;
         nfcWakeupPin = kDefaultNfcWakeupPin;
+        burstScanCount = kDefaultBurstScanCount;
         autoSleepEnabled = kDefaultAutoSleepEnabled;
         disableWiFiDuringSleep = kDefaultDisableWiFiDuringSleep;
         pn532SleepBetweenScans = kDefaultPn532SleepBetweenScans;
-        smartSleepEnabled = kDefaultSmartSleepEnabled;
         modemSleepOnMqttDisconnect = kDefaultModemSleepOnMqttDisconnect;
-        modemSleepDurationMs = kDefaultModemSleepDurationMs;
-        smartSleepShortThresholdMs = kDefaultSmartSleepShortThresholdMs;
-        smartSleepMediumThresholdMs = kDefaultSmartSleepMediumThresholdMs;
         activityTypeMask = kDefaultActivityTypeMask;
     }
 };

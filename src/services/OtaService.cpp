@@ -243,6 +243,7 @@ bool OtaService::beginDownload(const std::string &expectedMd5, const std::uint32
 
     m_otaState = OtaState::Downloading;
     m_progress = 0;
+    m_bus.publish(EventType::OtaStarted);
     m_updateMd5 = expectedMd5;
     m_updateTotalSize = expectedSize;
     m_updateDownloaded = 0;
@@ -380,6 +381,7 @@ void OtaService::processDownload()
             {
                 m_progress = progress;
                 m_lastProgressPublishMs = now;
+                m_bus.publish(EventType::OtaProgress);
                 m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = "ota/progress", .payload = std::to_string(m_progress)}});
             }
         }
@@ -406,6 +408,7 @@ void OtaService::completeDownload()
     m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = "ota/completed", .payload = "success"}});
     m_otaState = OtaState::Completed;
     m_progress = 100;
+    m_bus.publish(EventType::OtaCompleted);
     cleanupDownload();
     delay(100);
     ESP.restart();
@@ -417,6 +420,7 @@ void OtaService::failDownload(const char *reason)
     Update.end(false);
     m_otaState = OtaState::Error;
     m_progress = 0;
+    m_bus.publish(EventType::OtaError);
     m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = "ota/error", .payload = std::string("error: ") + reason}});
     cleanupDownload();
 }

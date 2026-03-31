@@ -16,7 +16,7 @@ namespace isic
 class Pn532Service : public ServiceBase
 {
 public:
-    Pn532Service(EventBus &bus, ConfigService& confiService);
+    Pn532Service(EventBus &bus, ConfigService &configService);
     ~Pn532Service() override = default;
 
     Pn532Service(const Pn532Service &) = delete;
@@ -63,18 +63,31 @@ public:
     void serializeMetrics(JsonObject &obj) const override
     {
         obj["state"] = toString(getState());
+        obj["power_mode"] = toString(m_powerMode);
         obj["card_reads"] = m_metrics.cardsRead;
         obj["reads_successful"] = m_metrics.successfulReads;
         obj["reads_failed"] = m_metrics.readErrors;
         obj["recoveries"] = m_metrics.recoveryAttempts;
+        obj["sleep_entries"] = m_metrics.sleepEntries;
+        obj["early_sleep_entries"] = m_metrics.earlySleepEntries;
+        obj["irq_wakeups"] = m_metrics.irqWakeups;
+        obj["wake_failures"] = m_metrics.wakeFailures;
+        obj["sleep_wake_reads"] = m_metrics.sleepWakeReads;
+        obj["wake_read_successes"] = m_metrics.sleepWakeReads;
+        obj["wake_read_failures"] = m_metrics.wakeReadFailures;
     }
 
 private:
     void startDetection();
     void handleCardDetected();
+    void handleWakeRead();
     void pollForCard();
-    void publishCardEvent(const std::uint8_t* uid, std::uint8_t uidLength);
+    void pollWhileAsleep();
+    void publishCardEvent(const std::uint8_t *uid, std::uint8_t uidLength);
     void handlePowerStateChange(const PowerEvent &power);
+    [[nodiscard]] bool shouldSleepBetweenScans() const;
+    [[nodiscard]] bool shouldDelaySleepAfterRead(std::uint32_t nowMs) const;
+    void enterRecovering(std::uint32_t nowMs);
     bool reinitializePn532();
     bool recoverIrqMode();
     bool waitForIrqHigh(std::uint32_t timeoutMs);
@@ -104,8 +117,12 @@ private:
     bool m_irqWakeupEnabled{false};
     bool m_detectionStarted{false};
     bool m_useIrqMode{false};
+    PowerState m_powerState{PowerState::Active};
+    Pn532PowerMode m_targetPowerMode{Pn532PowerMode::ActiveScan};
+    Pn532PowerMode m_powerMode{Pn532PowerMode::ActiveScan};
     std::uint32_t m_lastDetectionFailureMs{0};
     std::uint32_t m_pollIntervalMs{0};
+    std::uint32_t m_wakeRetryAtMs{0};
     std::uint8_t m_consecutiveErrors{0};
     int m_irqCurr{HIGH};  // Current IRQ pin state for edge detection
     int m_irqPrev{HIGH};  // Previous IRQ pin state for edge detection

@@ -410,342 +410,163 @@ The OTA service runs on port 80 alongside the AsyncWebServer for configuration.
 
 ## Power Management
 
-The firmware includes a comprehensive power management system for battery-powered deployments, targeting ~0.2mA in deep sleep.
+The reader now uses a smart dual-power model for passive ISIC scanning. Deep sleep is no longer part of the runtime flow; the ESP and PN532 are coordinated separately so the reader stays responsive during class bursts and only powers each subsystem down when the room is actually quiet.
 
-### Sleep Modes
+### Runtime States
 
-| Mode | Current | WiFi | CPU | Use Case |
-|------|---------|------|-----|----------|
-| **Active** | ~80mA | On | Running | Normal operation |
-| **Light Sleep** | ~2mA | Associated | Paused | Brief idle periods |
-| **Modem Sleep** | ~15mA | RF Off | Running | Processing without network |
-| **Deep Sleep** | ~0.2mA | Off | Off | Long idle periods |
+| ESP State | WiFi | PN532 Target | Use Case |
+|------|------|-------|----------|
+| **Active** | Connected when available | `ActiveScan` or `PowerDown` | Normal classroom operation or short quiet gap |
+| **Light Sleep** | Associated / power-save | `PowerDown` with IRQ wake | No relevant activity for `30s` |
+| **Modem Sleep** | Powered down | `PowerDown` with IRQ wake | No relevant activity for `5 min` or MQTT disconnect |
 
-### Signal-Based Architecture
+### Reader Flow
 
-PowerService uses **EventBus signals** for decoupled power management:
+```text
+Card scanned
+  -> both ESP and PN532 stay fully active for the short ready-hold
+  -> the scan is added to the rolling burst window
 
+Several cards in a short window
+  -> burst mode turns on
+  -> keep WiFi up
+  -> keep PN532 in ActiveScan
+
+Quiet gap after the burst
+  -> PN532 enters PowerDown first (default: after 10s)
+  -> ESP stays Active / connected
+
+Longer quiet gap
+  -> ESP enters LightSleep (default: after 30s)
+
+Long quiet period
+  -> ESP enters ModemSleep (default: after 5 min)
+  -> attendance still buffers locally
+
+First card after idle
+  -> PN532 IRQ goes LOW
+  -> Pn532Service wakes chip and reads the same card
+  -> CardScanned event wakes PowerService to Active and ActiveScan
+  -> WiFi reconnects asynchronously if it was in ModemSleep
 ```
-PowerService ──(PowerStateChange)──► EventBus
-                                        │
-                    ┌───────────────────┼───────────────────┐
-                    ▼                   ▼                   ▼
-             WiFiService         Pn532Service        (other services)
-                    │                   │
-                    ▼                   ▼
-        enterPowerSleep()         enterSleep()
-        wakeFromPowerSleep()      wakeup()
+
+### Service Coordination
+
+`PowerService` still drives power changes through `PowerStateChange` events:
+
+```text
+PowerService -> EventBus -> WiFiService / Pn532Service
 ```
 
-Each service subscribes to `PowerStateChange` and manages its own power state.
+- `WiFiService` keeps station state in `LightSleep` and powers Wi‑Fi down in `ModemSleep`.
+- `Pn532Service` can enter `PowerDown` before the ESP does and wakes on card IRQ.
+- `PowerService` blocks low-power entry while AP mode is active or OTA is downloading and suppresses sleep while card bursts are active.
 
-### Hardware Requirements
+### Hardware Notes
 
 | Connection | Purpose |
-|------------|--------|
-| **GPIO16 (D0) → RST** | Required for timer-based deep sleep wakeup |
-| **PN532 IRQ → RST** | Optional, for NFC card wakeup from deep sleep |
+|------------|---------|
+| **PN532 IRQ -> ESP GPIO** | Required for first-card wake in the dual-power idle model |
+
+The PN532 IRQ pin must match both `pn532.irqPin` and `power.nfcWakeupPin`.
 
 ### Usage Example
 
 ```cpp
-// Request deep sleep for 5 minutes
-app.getPowerService().requestSleep(PowerState::DeepSleep, 300000);
+// Force the reader into light sleep
+app.getPowerService().requestSleep(PowerState::LightSleep);
 
-// Enter modem sleep (WiFi off, CPU running)
-app.getPowerService().enterModemSleep();
+// Force the reader into modem sleep
+app.getPowerService().requestSleep(PowerState::ModemSleep);
 
-// Wake from modem sleep
-app.getPowerService().wakeFromModemSleep();
-
-// Check wakeup reason after deep sleep
-WakeupReason reason = app.getPowerService().getLastWakeupReason();
-if (reason == WakeupReason::External) {
-    // Woken by PN532 card detection or button
-}
+// Wake back to active immediately
+app.getPowerService().wakeToActive();
 ```
 
-### Smart Sleep System
-
-PowerService implements an intelligent power management system that automatically selects the optimal sleep mode based on activity patterns, network state, and estimated idle duration.
-
-#### How Smart Sleep Works
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                      SMART SLEEP DECISION FLOW                       │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  1. ACTIVITY TRACKING (Configurable via activityTypeMask)            │
-│     ┌────────────────────────────────────────────────────┐           │
-│     │ Event Type      │ Bitmask │ Resets Idle Timer?     │           │
-│     ├─────────────────┼─────────┼────────────────────────┤           │
-│     │ CardScanned     │ 0b00001 │ ✓ (default enabled)    │           │
-│     │ MqttMessage     │ 0b00010 │ ✓ (default enabled)    │           │
-│     │ WifiConnected   │ 0b00100 │ ✓ (default enabled)    │           │
-│     │ MqttConnected   │ 0b01000 │ ✗ (default disabled)   │           │
-│     │ NfcReady        │ 0b10000 │ ✗ (default disabled)   │           │
-│     └────────────────────────────────────────────────────┘           │
-│     Default mask: 0b00111 (Card, MQTT msg, WiFi)                     │
-│                                                                      │
-│  2. IDLE TIMEOUT CHECK (when autoSleepEnabled = true)                │
-│     ┌────────────────────────────────────────────────────┐           │
-│     │  if (millis() - lastActivity > idleTimeoutMs)      │           │
-│     │      → Trigger smart sleep selection               │           │
-│     └────────────────────────────────────────────────────┘           │
-│                                                                      │
-│  3. SLEEP DEPTH SELECTION (if smartSleepEnabled = true)              │
-│     ┌────────────────────────────────────────────────────┐           │
-│     │  Estimated Idle Duration < 30s?                    │           │
-│     │      → LIGHT SLEEP                                 │           │
-│     │                                                    │           │
-│     │  Estimated Idle Duration 30s - 5m?                 │           │
-│     │      MQTT Connected?                               │           │
-│     │          YES → LIGHT SLEEP                         │           │
-│     │          NO  → MODEM SLEEP (save power)            │           │
-│     │                                                    │           │
-│     │  Estimated Idle Duration > 5m?                     │           │
-│     │      Safe to deep sleep? (no pending ops)          │           │
-│     │          YES → DEEP SLEEP                          │           │
-│     │          NO  → MODEM SLEEP                         │           │
-│     └────────────────────────────────────────────────────┘           │
-│                                                                      │
-│  4. NETWORK-AWARE SLEEP (if modemSleepOnMqttDisconnect = true)       │
-│     ┌────────────────────────────────────────────────────┐           │
-│     │  MQTT Disconnected detected                        │           │
-│     │      → Auto-enter MODEM SLEEP                      │           │
-│     │      → Wake on MQTT reconnect                      │           │
-│     │      → Duration: modemSleepDurationMs (30s)        │           │
-│     └────────────────────────────────────────────────────┘           │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-#### State Machine Architecture
-
-PowerService follows the same event-driven architecture as MqttService:
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     POWERSERVICE STATE MACHINE                      │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  Uninitialized                                                      │
-│       │                                                             │
-│       │ begin()                                                     │
-│       ▼                                                             │
-│  Initializing ─────────────► (detect wakeup, load RTC, check       │
-│       │                       chained sleep)                        │
-│       │                                                             │
-│       ▼                                                             │
-│  Ready ◄────────────┐        (waiting for dependencies)            │
-│   │                 │                                               │
-│   │                 │ WiFi Disconnected                             │
-│   │                 │                                               │
-│   │ WiFi Connected  │                                               │
-│   │ autoSleepEnabled│                                               │
-│   ▼                 │                                               │
-│  Running ───────────┘        (active power management)             │
-│   │                                                                 │
-│   ├─► Idle Timeout Check                                           │
-│   │   └─► Smart Sleep Selection                                    │
-│   │                                                                 │
-│   └─► Network-Aware Check                                          │
-│       └─► Auto Modem Sleep if MQTT down                            │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-#### Non-Blocking Sleep Operations
-
-All sleep modes (except deep sleep) are **non-blocking** and async:
-
-```cpp
-// Light Sleep - Non-blocking with timer
-void enterLightSleepAsync(uint32_t durationMs) {
-    lightSleepActive_ = true;
-    lightSleepStartMs_ = millis();
-    lightSleepDurationMs_ = durationMs;
-    // loop() checks elapsed time and wakes up
-}
-
-// Modem Sleep - Non-blocking with timer
-void enterModemSleepAsync(uint32_t durationMs) {
-    modemSleepActive_ = true;
-    modemSleepStartMs_ = millis();
-    modemSleepDurationMs_ = durationMs;
-    WiFi.setSleep(WIFI_MODEM_SLEEP);
-    // loop() wakes after duration or MQTT reconnect
-}
-
-// Deep Sleep - Blocking (device resets on wakeup)
-void enterDeepSleepAsync(uint32_t durationMs) {
-    prepareForSleep(PowerState::DeepSleep);
-    saveToRtcMemory();  // Persist metrics
-    ESP.deepSleep(durationMs * 1000);  // Device resets
-}
-```
-
-#### Event-Driven Dependencies
-
-PowerService tracks WiFi and MQTT readiness through events:
-
-```cpp
-// Subscribe to WiFi events
-bus_.subscribeScoped(EventType::WifiConnected, [this](const Event&) {
-    wifiReady_ = true;
-    if (autoSleepEnabled && m_state == ServiceState::Ready)
-        setState(ServiceState::Running);
-});
-
-// Subscribe to MQTT events
-bus_.subscribeScoped(EventType::MqttConnected, [this](const Event&) {
-    mqttReady_ = true;
-    // Wake from modem sleep if active
-    if (modemSleepActive_)
-        wakeFromModemSleep();
-});
-
-bus_.subscribeScoped(EventType::MqttDisconnected, [this](const Event&) {
-    mqttReady_ = false;
-    // Network-aware: enter modem sleep to save power
-});
-```
-
-#### PN532 IRQ-Based Wakeup
-
-When `enableNfcWakeup` is enabled, the PN532 can wake the ESP from deep sleep:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    IRQ WAKEUP MECHANISM                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  1. PowerService enters deep sleep                             │
-│     ├─► Save metrics to RTC memory                             │
-│     ├─► Publish PowerStateChange(DeepSleep)                    │
-│     └─► ESP.deepSleep(duration)                                │
-│                                                                 │
-│  2. Pn532Service receives PowerStateChange                     │
-│     ├─► Put PN532 into sleep mode (10µA)                       │
-│     ├─► Enable RF field detection wakeup                       │
-│     └─► Configure IRQ pin to trigger on card                   │
-│                                                                 │
-│  3. Card enters NFC field                                      │
-│     ├─► PN532 detects RF field                                 │
-│     ├─► PN532 triggers IRQ pin                                 │
-│     └─► ESP wakes from deep sleep (device reset)               │
-│                                                                 │
-│  4. PowerService.begin() after wakeup                          │
-│     ├─► Detect wakeup reason (External = IRQ)                  │
-│     ├─► Restore metrics from RTC memory                        │
-│     ├─► Publish WakeupOccurred(External)                       │
-│     └─► Resume normal operation                                │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-
-Hardware Connection: PN532 IRQ → ESP GPIO (configured in nfcWakeupPin)
-Power Draw in Sleep: ~0.2mA (ESP) + ~10µA (PN532) ≈ 0.21mA total
-```
-
-#### Power Metrics
-
-PowerService tracks comprehensive metrics across sleep cycles:
-
-```cpp
-struct PowerServiceMetrics {
-    // Sleep cycle tracking
-    uint32_t lightSleepCycles{0};
-    uint32_t modemSleepCycles{0};
-    uint32_t deepSleepCycles{0};
-
-    // Duration tracking
-    uint32_t totalLightSleepMs{0};
-    uint32_t totalModemSleepMs{0};
-    uint32_t totalDeepSleepMs{0};     // Survives deep sleep via RTC
-
-    // Smart decision tracking
-    uint32_t idleTimeoutsTriggered{0};
-    uint32_t smartSleepDecisions{0};
-    uint32_t networkAwareSleeps{0};   // Auto modem sleep on MQTT down
-    uint32_t wakeupCount{0};          // Survives deep sleep via RTC
-};
-```
-
-### Configuration
+### Power Configuration
 
 ```cpp
 struct PowerConfig {
-    // Basic power management
-    bool enabled{true};
-    uint32_t deepSleepDurationMs{300000};    // 5 minutes
-    uint32_t lightSleepDurationMs{10000};    // 10 seconds
-    uint32_t idleTimeoutMs{60000};           // Auto-sleep after idle
-    bool autoSleepEnabled{false};
+    uint32_t readerIdleTimeoutMs{30000};     // 30 seconds to ESP LightSleep
+    uint32_t modemSleepAfterMs{300000};      // 5 minutes to ESP ModemSleep
+    uint32_t pn532SleepAfterMs{10000};       // 10 seconds to PN532 PowerDown
+    uint32_t readerReadyHoldMs{5000};        // 5 seconds both stay fully active after a read
+    uint32_t burstWindowMs{15000};           // 15 second rolling burst window
+    uint32_t burstHoldMs{45000};             // 45 seconds to keep burst mode active after last scan
+    uint8_t nfcWakeupPin{Pn532Config::kDefaultIrqPin};
+    uint8_t burstScanCount{3};               // burst mode after 3 scans in the window
+    uint8_t activityTypeMask{0b00001};       // CardScanned only by default
     bool enableNfcWakeup{true};
-    uint8_t nfcWakeupPin{5};                 // GPIO5 (D1)
-
-    // Smart sleep management
-    bool smartSleepEnabled{true};
+    bool autoSleepEnabled{false};
+    bool disableWiFiDuringSleep{true};
+    bool pn532SleepBetweenScans{true};
     bool modemSleepOnMqttDisconnect{true};
-    uint32_t modemSleepDurationMs{30000};            // 30 seconds
-    uint32_t smartSleepShortThresholdMs{30000};      // <30s = light
-    uint32_t smartSleepMediumThresholdMs{300000};    // <5m = modem/light
-
-    // Activity tracking (bitmask: Card|MQTT|WiFi|MqttConn|NfcReady)
-    uint8_t activityTypeMask{0b00111};               // Default: Card + MQTT msg + WiFi
 };
 ```
 
-#### Configuration Examples
+### Example Profiles
 
-**Minimal Power (Battery Optimized)**
+**Balanced Classroom**
 ```json
 {
   "power": {
     "autoSleepEnabled": true,
-    "smartSleepEnabled": true,
-    "idleTimeoutMs": 30000,
+    "pn532SleepAfterMs": 10000,
+    "readerReadyHoldMs": 5000,
+    "burstWindowMs": 15000,
+    "burstScanCount": 3,
+    "burstHoldMs": 45000,
+    "readerIdleTimeoutMs": 30000,
+    "modemSleepAfterMs": 300000,
     "modemSleepOnMqttDisconnect": true,
-    "activityTypeMask": 1,
-    "enableNfcWakeup": true
+    "pn532SleepBetweenScans": true,
+    "activityTypeMask": 1
   }
 }
 ```
-- Only card scans reset idle timer (mask = 0b00001)
-- Enter modem sleep when MQTT down
-- Auto deep sleep after 30s idle
-- Wake on card detection via IRQ
+- First-stage PN532 sleep after 10 seconds of quiet
+- Short post-scan ready hold keeps both ESP and PN532 hot
+- Burst mode keeps WiFi and PN532 fully awake during classroom tap waves
+- Full Wi‑Fi power-down after 5 minutes
+- Card activity is the only default wake-reset source
 
-**Maximum Responsiveness (Mains Powered)**
+**Always Ready**
 ```json
 {
   "power": {
     "autoSleepEnabled": false,
-    "smartSleepEnabled": false,
     "activityTypeMask": 31
   }
 }
 ```
-- No automatic sleep
-- All events tracked (mask = 0b11111)
-- Always active for instant response
+- No automatic low-power entry
+- Useful for mains-powered or test deployments
 
-**Balanced (Default)**
-```json
-{
-  "power": {
-    "autoSleepEnabled": true,
-    "smartSleepEnabled": true,
-    "idleTimeoutMs": 60000,
-    "modemSleepOnMqttDisconnect": true,
-    "activityTypeMask": 7
-  }
-}
-```
-- Card scans, MQTT messages, WiFi events reset timer (mask = 0b00111)
-- Smart sleep selection based on duration and network state
-- Network-aware modem sleep when MQTT disconnected
+### Metrics
+
+`PowerService` tracks:
+- `light_sleep_entries`
+- `modem_sleep_entries`
+- `light_sleep_wakeups`
+- `modem_sleep_wakeups`
+- `burst_entries`
+- `burst_exits`
+- `sleep_blocked`
+- `sleep_blocked_ap`
+- `sleep_blocked_ota`
+- `sleep_suppressed_by_burst`
+
+`Pn532Service` tracks:
+- `sleep_entries`
+- `early_sleep_entries`
+- `irq_wakeups`
+- `wake_failures`
+- `sleep_wake_reads`
+- `wake_read_failures`
+
+### Battery Estimates
+
+See [docs/BATTERY_CONSUMPTION.md](/Users/andrian/stu/ing1/1/tp/isic-project-hardware/docs/BATTERY_CONSUMPTION.md) for current estimates, runtime formulas, classroom duty-cycle examples, and a measurement procedure.
 
 ---
 
