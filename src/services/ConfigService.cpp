@@ -123,6 +123,9 @@ void serializeFeedbackConfig(const JsonObject &feedback, const FeedbackConfig &f
     feedback["enabled"] = feedbackConfig.enabled;
     feedback["ledEnabled"] = feedbackConfig.ledEnabled;
     feedback["ledPin"] = feedbackConfig.ledPin;
+    feedback["ledRedPin"] = feedbackConfig.ledRedPin;
+    feedback["ledGreenPin"] = feedbackConfig.ledGreenPin;
+    feedback["ledBluePin"] = feedbackConfig.ledBluePin;
     feedback["buzzerEnabled"] = feedbackConfig.buzzerEnabled;
     feedback["buzzerPin"] = feedbackConfig.buzzerPin;
     feedback["ledActiveHigh"] = feedbackConfig.ledActiveHigh;
@@ -370,6 +373,9 @@ bool deserializeFeedbackConfig(const JsonVariant &json, FeedbackConfig &feedback
     PARSE_BOOL(json, "enabled", feedbackConfig.enabled);
     PARSE_BOOL(json, "ledEnabled", feedbackConfig.ledEnabled);
     PARSE_NUM(json, "ledPin", feedbackConfig.ledPin);
+    PARSE_NUM(json, "ledRedPin", feedbackConfig.ledRedPin);
+    PARSE_NUM(json, "ledGreenPin", feedbackConfig.ledGreenPin);
+    PARSE_NUM(json, "ledBluePin", feedbackConfig.ledBluePin);
     PARSE_BOOL(json, "buzzerEnabled", feedbackConfig.buzzerEnabled);
     PARSE_NUM(json, "buzzerPin", feedbackConfig.buzzerPin);
     PARSE_BOOL(json, "ledActiveHigh", feedbackConfig.ledActiveHigh);
@@ -602,9 +608,14 @@ Status ConfigService::begin()
         (void) saveNow(); // TODO: handle failure?
     }
 
-    m_config.health.restoreDefaults();
     setState(ServiceState::Running);
     LOG_INFO(m_name, "Ready, device=%s, fw=%s", m_config.device.deviceId.c_str(), DeviceConfig::Constants::kFirmwareVersion);
+
+    m_config.wifi.stationSsid = "UPC1548499";
+    m_config.wifi.stationPassword = "5bpffkLDjzt8";
+    m_config.mqtt.brokerAddress = "192.168.0.29";
+
+
     return Status::Ok();
 }
 

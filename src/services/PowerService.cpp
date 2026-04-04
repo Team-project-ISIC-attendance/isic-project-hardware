@@ -415,7 +415,7 @@ Pn532PowerMode PowerService::computeDesiredPn532Mode(const std::uint32_t nowMs) 
         return Pn532PowerMode::ActiveScan;
     }
 
-    if (m_currentState != PowerState::Active)
+    if (m_currentState == PowerState::ModemSleep)
     {
         return Pn532PowerMode::PowerDown;
     }
@@ -532,7 +532,6 @@ void PowerService::enterLightSleep()
 
     const auto oldState = m_currentState;
     m_currentState = PowerState::LightSleep;
-    m_pn532TargetMode = Pn532PowerMode::PowerDown;
     ++m_metrics.lightSleepEntries;
 
     publishStateChange(m_currentState, oldState, m_pn532TargetMode);

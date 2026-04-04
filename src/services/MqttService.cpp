@@ -19,7 +19,7 @@ MqttService::MqttService(EventBus &bus, const MqttConfig &config, const DeviceCo
     s_instance = this;
     m_mqttClient.setClient(m_networkClient); // Bind transport client once during construction
 
-    m_eventConnections.reserve(4);
+    m_eventConnections.reserve(5);
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::WifiConnected, [this](const Event &e) {
         LOG_DEBUG(m_name, "WiFi connected, attempting MQTT connection");
         m_wifiReady = true;
@@ -51,6 +51,23 @@ MqttService::MqttService(EventBus &bus, const MqttConfig &config, const DeviceCo
         {
             LOG_DEBUG(m_name, "MQTT subscribed to topic: %s", mqtt->topic.c_str());
             subscribe(mqtt->topic.c_str());
+        }
+    }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::PowerStateChange, [this](const Event &e) {
+        const auto *power = e.get<PowerEvent>();
+        if (!power)
+        {
+            return;
+        }
+        if (power->targetState == PowerState::ModemSleep)
+        {
+            m_powerSleepActive = true;
+            LOG_DEBUG(m_name, "Power sleep active - reconnects suppressed");
+        }
+        else if (power->previousState == PowerState::ModemSleep && power->targetState == PowerState::Active)
+        {
+            m_powerSleepActive = false;
+            LOG_DEBUG(m_name, "Power sleep ended - reconnects allowed");
         }
     }));
 }
@@ -93,9 +110,17 @@ void MqttService::loop()
         {
             m_mqttState = MqttState::Disconnected;
             setState(ServiceState::Ready);
-            m_bus.publish(EventType::MqttDisconnected);
-            LOG_WARN(m_name, "MQTT disconnected during loop - service now Ready (will reconnect)");
+            if (!m_powerSleepActive)
+            {
+                m_bus.publish(EventType::MqttDisconnected);
+                LOG_WARN(m_name, "MQTT disconnected during loop - service now Ready (will reconnect)");
+            }
         }
+        return;
+    }
+
+    if (m_powerSleepActive)
+    {
         return;
     }
 
@@ -103,10 +128,7 @@ void MqttService::loop()
     if (m_mqttState == MqttState::Connected)
     {
         m_mqttState = MqttState::Disconnected;
-
-        // Service no longer fully operational - back to Ready state
         setState(ServiceState::Ready);
-
         m_bus.publish(EventType::MqttDisconnected);
         LOG_WARN(m_name, "MQTT disconnected - service now Ready (will reconnect)");
     }

@@ -129,19 +129,23 @@ def deploy_firmware(source, target, env):
         print(f"[OTA] Firmware not found: {firmware_path}")
         return
 
-    project_dir = Path(env.get("PROJECT_DIR", "."))
-    deploy_dir = project_dir / "ota" / "firmware"
-    deploy_dir.mkdir(parents=True, exist_ok=True)
-
     version = get_firmware_version(env)
     board = env.get("BOARD", "unknown")
     flash_method = os.getenv("FLASH_METHOD", env.GetProjectOption("flash_method", "serial") or "serial").strip().lower()
 
+    # Serial upload — nothing to do here
+    if flash_method != "ota":
+        return
+
     print(f"\n{'='*60}")
-    print(f"OTA Deployment - {flash_method.upper()} mode")
+    print(f"OTA Deployment")
     print(f"{'='*60}")
     print(f"Version: {version}")
     print(f"Board: {board}")
+
+    project_dir = Path(env.get("PROJECT_DIR", "."))
+    deploy_dir = project_dir / "ota" / "firmware"
+    deploy_dir.mkdir(parents=True, exist_ok=True)
 
     # Copy firmware locally
     dest_firmware = deploy_dir / "firmware.bin"
@@ -166,13 +170,11 @@ def deploy_firmware(source, target, env):
     manifest_path = deploy_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
-    # If OTA mode, POST to server
-    if flash_method == "ota":
-        server_url = env.GetProjectOption("ota_server_url", "") or os.getenv("OTA_SERVER_URL", "")
-        if server_url:
-            post_firmware_to_server(firmware_path, manifest, server_url)
-        else:
-            print("[OTA] No ota_server_url set in platformio.ini")
+    server_url = env.GetProjectOption("ota_server_url", "") or os.getenv("OTA_SERVER_URL", "")
+    if server_url:
+        post_firmware_to_server(firmware_path, manifest, server_url)
+    else:
+        print("[OTA] No ota_server_url set — firmware staged locally only")
 
     print(f"{'='*60}\n")
 

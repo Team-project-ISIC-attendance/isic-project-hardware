@@ -64,8 +64,9 @@ private:
     void queuePattern(const FeedbackPattern &pattern);
     void executePattern(const FeedbackPattern &pattern);
 
-    void setLed(bool on);
+    void setLed(LedColor color);
     void setBuzzer(bool on, std::uint16_t frequencyHz = 0);
+    [[nodiscard]] bool isRgb() const noexcept;
 
     EventBus &m_bus;
     FeedbackConfig &m_config;
@@ -82,9 +83,9 @@ private:
     std::uint32_t m_cycleStartMs{0}; ///< Start time of current cycle
     bool m_inPattern{false}; ///< Whether a pattern is currently being executed
 
-    bool m_enabled{true}; ///< Service enabled flag
-    bool m_ledCurrentState{false}; ///< Current LED state
-    bool m_buzzerCurrentState{false}; ///< Current buzzer state
+    bool m_enabled{true};
+    LedColor m_ledCurrentColor{LedColor::Off};
+    bool m_buzzerCurrentState{false};
 
     // Subscribed events
     std::vector<EventBus::ScopedConnection> m_eventConnections{};

@@ -282,6 +282,18 @@ struct AttendanceRecord
     CardUid cardUid{}; ///< Scanned card UID
 };
 
+enum class LedColor : std::uint8_t
+{
+    Off     = 0,
+    Red     = 0b001,
+    Green   = 0b010,
+    Blue    = 0b100,
+    Yellow  = 0b011, // R+G
+    Cyan    = 0b110, // G+B
+    Magenta = 0b101, // R+B
+    White   = 0b111, // R+G+B
+};
+
 /**
  * @brief Feedback pattern definition
  *
@@ -291,12 +303,13 @@ struct AttendanceRecord
  */
 struct FeedbackPattern
 {
-    std::uint16_t ledOnMs{0}; ///< LED on duration per cycle
-    std::uint16_t ledOffMs{0}; ///< LED off duration per cycle
-    std::uint16_t beepMs{0}; ///< Buzzer duration per cycle (0 = silent)
-    std::uint16_t beepFrequencyHz{2000}; ///< Buzzer frequency
-    std::uint8_t repeatCount{1}; ///< Number of cycles (0xFF = infinite)
-    bool useErrorLed{false}; ///< Use error LED instead of status LED (future)
+    std::uint16_t ledOnMs{0};          ///< LED on duration per cycle
+    std::uint16_t ledOffMs{0};         ///< LED off duration per cycle
+    std::uint16_t beepMs{0};           ///< Buzzer duration per cycle (0 = silent)
+    std::uint16_t beepFrequencyHz{2000};
+    std::uint8_t repeatCount{1};       ///< Number of cycles (0xFF = infinite)
+    LedColor color{LedColor::White};   ///< RGB color (ignored for single-pin LED)
+    bool useErrorLed{false};           ///< unused, kept for ABI compat
 };
 // ============================================================================
 // Event Payloads

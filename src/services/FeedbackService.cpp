@@ -7,79 +7,61 @@
 
 namespace isic
 {
+/*
+ * Feedback patterns — LED + buzzer reference
+ *
+ * Event              Color    Beep   Meaning
+ * ─────────────────────────────────────────────
+ * Card detected      Cyan     —      NFC tag in range
+ * Attendance OK      Green    2×     Scan recorded
+ * Error              Red      3×     Read/record failed
+ * Processing         Blue     —      Waiting on network
+ * Connected          Green    —      WiFi + MQTT up
+ * Disconnected       Magenta  —      Connection lost
+ * OTA updating       Cyan∞    1×     Do not power off
+ * OTA done           Green    5×     Firmware updated
+ */
 namespace
 {
-// Card scanned - quick acknowledgment
+// Card detected — cyan flash: "I see your card"
 constexpr FeedbackPattern PATTERN_CARD_SCANNED{
-        .ledOnMs = 50,
-        .ledOffMs = 50,
-        .beepMs = 50,
-        .beepFrequencyHz = 2000,
-        .repeatCount = 1,
-        .useErrorLed = false};
+        .ledOnMs = 150, .ledOffMs = 0, .beepMs = 0, .beepFrequencyHz = 0,
+        .repeatCount = 1, .color = LedColor::Cyan};
 
-// Success - double blink with beep
+// Attendance recorded — green double blink + 2 beeps
 constexpr FeedbackPattern PATTERN_SUCCESS{
-        .ledOnMs = 100,
-        .ledOffMs = 50,
-        .beepMs = 100,
-        .beepFrequencyHz = 2500,
-        .repeatCount = 2,
-        .useErrorLed = false};
+        .ledOnMs = 200, .ledOffMs = 100, .beepMs = 80, .beepFrequencyHz = 2800,
+        .repeatCount = 2, .color = LedColor::Green};
 
-// Error - longer, triple blink
+// Read/record error — red triple blink + 3 low beeps
 constexpr FeedbackPattern PATTERN_ERROR{
-        .ledOnMs = 200,
-        .ledOffMs = 100,
-        .beepMs = 200,
-        .beepFrequencyHz = 1000,
-        .repeatCount = 3,
-        .useErrorLed = true};
+        .ledOnMs = 150, .ledOffMs = 100, .beepMs = 120, .beepFrequencyHz = 700,
+        .repeatCount = 3, .color = LedColor::Red};
 
-// Processing - rapid blink, no beep
+// Processing/waiting — blue pulse, silent
 constexpr FeedbackPattern PATTERN_PROCESSING{
-        .ledOnMs = 50,
-        .ledOffMs = 50,
-        .beepMs = 0,
-        .beepFrequencyHz = 0,
-        .repeatCount = 5,
-        .useErrorLed = false};
+        .ledOnMs = 80, .ledOffMs = 80, .beepMs = 0, .beepFrequencyHz = 0,
+        .repeatCount = 4, .color = LedColor::Blue};
 
-// Connected - single long blink with beep
+// WiFi + MQTT connected — green steady glow, silent
 constexpr FeedbackPattern PATTERN_CONNECTED{
-        .ledOnMs = 500,
-        .ledOffMs = 0,
-        .beepMs = 100,
-        .beepFrequencyHz = 2500,
-        .repeatCount = 1,
-        .useErrorLed = false};
+        .ledOnMs = 400, .ledOffMs = 0, .beepMs = 0, .beepFrequencyHz = 0,
+        .repeatCount = 1, .color = LedColor::Green};
 
-// Disconnected - double blink, no beep
+// Connection lost — magenta double blink, silent
 constexpr FeedbackPattern PATTERN_DISCONNECTED{
-        .ledOnMs = 100,
-        .ledOffMs = 100,
-        .beepMs = 0,
-        .beepFrequencyHz = 0,
-        .repeatCount = 2,
-        .useErrorLed = false};
+        .ledOnMs = 200, .ledOffMs = 200, .beepMs = 0, .beepFrequencyHz = 0,
+        .repeatCount = 2, .color = LedColor::Magenta};
 
-// OTA Start - slow continuous blink
+// OTA in progress — cyan slow infinite blink + single beep on first cycle
 constexpr FeedbackPattern PATTERN_OTA_START{
-        .ledOnMs = 1000,
-        .ledOffMs = 1000,
-        .beepMs = 200,
-        .beepFrequencyHz = 1500,
-        .repeatCount = 0xFF, // Infinite
-        .useErrorLed = false};
+        .ledOnMs = 800, .ledOffMs = 800, .beepMs = 100, .beepFrequencyHz = 1200,
+        .repeatCount = 0xFF, .color = LedColor::Cyan};
 
-// OTA Complete - rapid success pattern
+// OTA complete — green rapid blink + 5 beeps
 constexpr FeedbackPattern PATTERN_OTA_COMPLETE{
-        .ledOnMs = 100,
-        .ledOffMs = 50,
-        .beepMs = 100,
-        .beepFrequencyHz = 3000,
-        .repeatCount = 5,
-        .useErrorLed = false};
+        .ledOnMs = 100, .ledOffMs = 50, .beepMs = 60, .beepFrequencyHz = 3200,
+        .repeatCount = 5, .color = LedColor::Green};
 } // anonymous namespace
 
 FeedbackService::FeedbackService(EventBus &bus, FeedbackConfig &config)
@@ -87,12 +69,33 @@ FeedbackService::FeedbackService(EventBus &bus, FeedbackConfig &config)
     , m_bus(bus)
     , m_config(config)
 {
-    m_eventConnections.reserve(1); // Known subscription count
+    // Silence buzzer immediately — pin would float until begin() otherwise
+    if (m_config.buzzerEnabled && m_config.buzzerPin != 0xFF)
+    {
+        pinMode(m_config.buzzerPin, OUTPUT);
+        digitalWrite(m_config.buzzerPin, LOW);
+    }
 
-    m_eventConnections.push_back(
-            m_bus.subscribeScoped(EventType::AttendanceRecorded, [this](const Event &) {
-                signalSuccess();
-            }));
+    m_eventConnections.reserve(6);
+
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::CardScanned, [this](const Event &) {
+        queuePattern(PATTERN_CARD_SCANNED);
+    }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::AttendanceRecorded, [this](const Event &) {
+        signalSuccess();
+    }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
+        signalConnected();
+    }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::WifiDisconnected, [this](const Event &) {
+        signalDisconnected();
+    }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::OtaStarted, [this](const Event &) {
+        signalOtaStart();
+    }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::OtaCompleted, [this](const Event &) {
+        signalOtaComplete();
+    }));
 }
 
 Status FeedbackService::begin()
@@ -102,25 +105,42 @@ Status FeedbackService::begin()
 
     if (!m_config.enabled)
     {
-        LOG_INFO(m_name, "Disabled by config");
+        LOG_WARN(m_name, "Disabled by config — no LED/buzzer output");
         m_enabled = false;
         setState(ServiceState::Running);
         return Status::Ok();
     }
 
-    // Configure LED pin
-    if (m_config.ledEnabled && m_config.ledPin != 0xFF)
+    // Configure LED pin(s)
+    if (m_config.ledEnabled)
     {
-        pinMode(m_config.ledPin, OUTPUT);
-        setLed(false); // Ensure off state respects polarity
-        LOG_DEBUG(m_name, "LED GPIO%u, activeHigh=%d", m_config.ledPin, m_config.ledActiveHigh);
+        if (isRgb())
+        {
+            pinMode(m_config.ledRedPin,   OUTPUT);
+            pinMode(m_config.ledGreenPin, OUTPUT);
+            pinMode(m_config.ledBluePin,  OUTPUT);
+            setLed(LedColor::Off);
+            LOG_INFO(m_name, "RGB LED ready R=GPIO%u G=GPIO%u B=GPIO%u activeHigh=%d",
+                     m_config.ledRedPin, m_config.ledGreenPin, m_config.ledBluePin, m_config.ledActiveHigh);
+        }
+        else if (m_config.ledPin != 0xFF)
+        {
+            pinMode(m_config.ledPin, OUTPUT);
+            setLed(LedColor::Off);
+            LOG_INFO(m_name, "Single LED ready GPIO%u activeHigh=%d", m_config.ledPin, m_config.ledActiveHigh);
+        }
+        else
+        {
+            LOG_WARN(m_name, "LED enabled but no pin configured");
+        }
     }
 
     // Configure buzzer pin
     if (m_config.buzzerEnabled && m_config.buzzerPin != 0xFF)
     {
         pinMode(m_config.buzzerPin, OUTPUT);
-        setBuzzer(false);
+        noTone(m_config.buzzerPin);
+        digitalWrite(m_config.buzzerPin, LOW);
         LOG_DEBUG(m_name, "Buzzer GPIO%u, freq=%uHz", m_config.buzzerPin, m_config.beepFrequencyHz);
     }
 
@@ -148,12 +168,10 @@ void FeedbackService::loop()
         {
             m_currentRepeat++;
 
-            // Check if pattern completed (0xFF = infinite)
             if (m_currentPattern.repeatCount != 0xFF && (m_currentRepeat >= m_currentPattern.repeatCount))
             {
-                // Pattern complete
                 m_inPattern = false;
-                setLed(false);
+                setLed(LedColor::Off);
                 setBuzzer(false);
                 return;
             }
@@ -165,9 +183,8 @@ void FeedbackService::loop()
         // Recalculate elapsed for current cycle
         const auto cycleElapsed{now - m_cycleStartMs};
 
-        // LED state: ON during ledOnMs, OFF during ledOffMs
         const bool ledOn{cycleElapsed < m_currentPattern.ledOnMs};
-        setLed(ledOn);
+        setLed(ledOn ? m_currentPattern.color : LedColor::Off);
 
         // Buzzer state: ON during beepMs at start of cycle
         const bool buzzerOn{(m_currentPattern.beepMs > 0) && (cycleElapsed < m_currentPattern.beepMs)};
@@ -187,7 +204,7 @@ void FeedbackService::loop()
 
 void FeedbackService::end()
 {
-    setLed(false);
+    setLed(LedColor::Off);
     setBuzzer(false);
     clearQueue();
     m_inPattern = false;
@@ -197,37 +214,44 @@ void FeedbackService::end()
 
 void FeedbackService::signalSuccess()
 {
+    LOG_INFO(m_name, "Signal: success (green x2)");
     queuePattern(PATTERN_SUCCESS);
 }
 
 void FeedbackService::signalError()
 {
+    LOG_INFO(m_name, "Signal: error (red x3)");
     queuePattern(PATTERN_ERROR);
 }
 
 void FeedbackService::signalProcessing()
 {
+    LOG_INFO(m_name, "Signal: processing (blue x5)");
     queuePattern(PATTERN_PROCESSING);
 }
 
 void FeedbackService::signalConnected()
 {
+    LOG_INFO(m_name, "Signal: connected (green long)");
     queuePattern(PATTERN_CONNECTED);
 }
 
 void FeedbackService::signalDisconnected()
 {
+    LOG_INFO(m_name, "Signal: disconnected (yellow x2)");
     queuePattern(PATTERN_DISCONNECTED);
 }
 
 void FeedbackService::signalOtaStart()
 {
-    clearQueue(); // OTA takes priority
+    LOG_INFO(m_name, "Signal: OTA start (cyan blink)");
+    clearQueue();
     queuePattern(PATTERN_OTA_START);
 }
 
 void FeedbackService::signalOtaComplete()
 {
+    LOG_INFO(m_name, "Signal: OTA complete (green x5)");
     queuePattern(PATTERN_OTA_COMPLETE);
 }
 
@@ -254,10 +278,9 @@ void FeedbackService::ledOnce(const std::uint16_t durationMs)
         return;
     }
 
-    // This is blocking - use sparingly
-    setLed(true);
+    setLed(LedColor::White);
     delay(durationMs);
-    setLed(false);
+    setLed(LedColor::Off);
 }
 
 void FeedbackService::queuePattern(const FeedbackPattern &pattern)
@@ -285,8 +308,11 @@ void FeedbackService::executePattern(const FeedbackPattern &pattern)
     m_cycleStartMs = millis();
     m_inPattern = true;
 
-    // Immediately start first cycle
-    setLed(pattern.ledOnMs > 0);
+    LOG_DEBUG(m_name, "Pattern start: color=%u repeat=%u on=%ums off=%ums",
+              static_cast<uint8_t>(pattern.color), pattern.repeatCount,
+              pattern.ledOnMs, pattern.ledOffMs);
+
+    setLed(pattern.ledOnMs > 0 ? pattern.color : LedColor::Off);
     if (pattern.beepMs > 0)
     {
         setBuzzer(true, pattern.beepFrequencyHz);
@@ -303,28 +329,41 @@ void FeedbackService::clearQueue() noexcept
 void FeedbackService::stopCurrent() noexcept
 {
     m_inPattern = false;
-    setLed(false);
+    setLed(LedColor::Off);
     setBuzzer(false);
 }
 
-void FeedbackService::setLed(const bool on)
+bool FeedbackService::isRgb() const noexcept
 {
-    if (!m_config.ledEnabled || m_config.ledPin == 0xFF)
+    return m_config.ledRedPin != 0xFF && m_config.ledGreenPin != 0xFF && m_config.ledBluePin != 0xFF;
+}
+
+void FeedbackService::setLed(const LedColor color)
+{
+    if (!m_config.ledEnabled || color == m_ledCurrentColor)
     {
         return;
     }
 
-    // Avoid redundant writes
-    if (on == m_ledCurrentState)
+    m_ledCurrentColor = color;
+
+    if (isRgb())
     {
-        return;
+        const auto bits = static_cast<std::uint8_t>(color);
+        const bool ah = m_config.ledActiveHigh;
+        LOG_DEBUG(m_name, "RGB color=%u (R=%d G=%d B=%d)",
+                  bits, !!(bits & 0b001), !!(bits & 0b010), !!(bits & 0b100));
+        digitalWrite(m_config.ledRedPin,   (bits & 0b001) ? (ah ? HIGH : LOW) : (ah ? LOW : HIGH));
+        digitalWrite(m_config.ledGreenPin, (bits & 0b010) ? (ah ? HIGH : LOW) : (ah ? LOW : HIGH));
+        digitalWrite(m_config.ledBluePin,  (bits & 0b100) ? (ah ? HIGH : LOW) : (ah ? LOW : HIGH));
     }
-
-    m_ledCurrentState = on;
-
-    // Handle active-low LEDs (common on ESP8266 boards)
-    const bool pinState{m_config.ledActiveHigh ? on : !on};
-    digitalWrite(m_config.ledPin, pinState ? HIGH : LOW);
+    else if (m_config.ledPin != 0xFF)
+    {
+        const bool on = (color != LedColor::Off);
+        LOG_DEBUG(m_name, "LED %s", on ? "ON" : "OFF");
+        const bool pinState = m_config.ledActiveHigh ? on : !on;
+        digitalWrite(m_config.ledPin, pinState ? HIGH : LOW);
+    }
 }
 
 void FeedbackService::setBuzzer(const bool on, std::uint16_t frequencyHz)
@@ -344,13 +383,15 @@ void FeedbackService::setBuzzer(const bool on, std::uint16_t frequencyHz)
 
     if (on)
     {
-        // Use config frequency if not specified
         const auto freq{(frequencyHz > 0) ? frequencyHz : m_config.beepFrequencyHz};
+        LOG_DEBUG(m_name, "Buzzer ON %uHz GPIO%u", freq, m_config.buzzerPin);
         tone(m_config.buzzerPin, freq);
     }
     else
     {
+        LOG_DEBUG(m_name, "Buzzer OFF");
         noTone(m_config.buzzerPin);
+        digitalWrite(m_config.buzzerPin, LOW);
     }
 }
 } // namespace isic
