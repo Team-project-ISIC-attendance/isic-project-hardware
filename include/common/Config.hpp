@@ -197,7 +197,7 @@ struct AttendanceConfig
         static constexpr auto kDebounceCacheSize{8};
     };
 
-    static constexpr auto kDefaultDebounceIntervalMs{60'000}; // 60 seconds
+    static constexpr auto kDefaultDebounceIntervalMs{3'000}; // 3 seconds
     static constexpr auto kDefaultBatchMaxSize{5};
     static constexpr auto kDefaultOfflineBufferSize{20};
     static constexpr auto kDefaultBatchFlushIntervalMs{10'000}; // 10 seconds
@@ -237,12 +237,15 @@ struct FeedbackConfig
         static constexpr auto kPatternQueueSize{8};
     };
 
-    static constexpr auto kDefaultEnabled{false};
+    static constexpr auto kDefaultEnabled{true};
     static constexpr auto kDefaultLedEnabled{true};
     static constexpr auto kDefaultLedPin{0xFF};
+    static constexpr auto kDefaultLedRedPin{25};
+    static constexpr auto kDefaultLedGreenPin{26};
+    static constexpr auto kDefaultLedBluePin{23};
     static constexpr auto kDefaultBuzzerEnabled{true};
-    static constexpr auto kDefaultBuzzerPin{0xFF};
-    static constexpr auto kDefaultLedActiveHigh{false};
+    static constexpr auto kDefaultBuzzerPin{32};
+    static constexpr auto kDefaultLedActiveHigh{true}; // common cathode = active high
     static constexpr auto kDefaultBeepFrequencyHz{2'000};
     static constexpr auto kDefaultSuccessBlinkDurationMs{100};
     static constexpr auto kDefaultErrorBlinkDurationMs{200};
@@ -250,7 +253,10 @@ struct FeedbackConfig
     std::uint16_t beepFrequencyHz{kDefaultBeepFrequencyHz};
     std::uint16_t successBlinkDurationMs{kDefaultSuccessBlinkDurationMs};
     std::uint16_t errorBlinkDurationMs{kDefaultErrorBlinkDurationMs};
-    std::uint8_t ledPin{kDefaultLedPin};
+    std::uint8_t ledPin{kDefaultLedPin};           ///< Single-color LED (fallback)
+    std::uint8_t ledRedPin{kDefaultLedRedPin};
+    std::uint8_t ledGreenPin{kDefaultLedGreenPin};
+    std::uint8_t ledBluePin{kDefaultLedBluePin};
     std::uint8_t buzzerPin{kDefaultBuzzerPin};
     bool enabled{kDefaultEnabled};
     bool ledEnabled{kDefaultLedEnabled};
@@ -267,6 +273,9 @@ struct FeedbackConfig
         enabled = kDefaultEnabled;
         ledEnabled = kDefaultLedEnabled;
         ledPin = kDefaultLedPin;
+        ledRedPin = kDefaultLedRedPin;
+        ledGreenPin = kDefaultLedGreenPin;
+        ledBluePin = kDefaultLedBluePin;
         buzzerEnabled = kDefaultBuzzerEnabled;
         buzzerPin = kDefaultBuzzerPin;
         ledActiveHigh = kDefaultLedActiveHigh;
@@ -357,11 +366,11 @@ struct PowerConfig
 
     static constexpr auto kDefaultReaderIdleTimeoutMs{30'000}; // 30 seconds
     static constexpr auto kDefaultModemSleepAfterMs{300'000}; // 5 minutes
-    static constexpr auto kDefaultPn532SleepAfterMs{10'000}; // 10 seconds
-    static constexpr auto kDefaultReaderReadyHoldMs{5'000}; // 5 seconds
-    static constexpr auto kDefaultBurstWindowMs{15'000}; // 15 seconds
+    static constexpr auto kDefaultPn532SleepAfterMs{10'000};  // 10 seconds
+    static constexpr auto kDefaultReaderReadyHoldMs{5'000};   // 5 seconds
+    static constexpr auto kDefaultBurstWindowMs{15'000};      // 15 seconds
     static constexpr auto kDefaultBurstScanCount{3};
-    static constexpr auto kDefaultBurstHoldMs{45'000}; // 45 seconds
+    static constexpr auto kDefaultBurstHoldMs{45'000};        // 45 seconds
     static constexpr auto kDefaultEnableNfcWakeup{true};
     static constexpr auto kDefaultNfcWakeupPin{Pn532Config::kDefaultIrqPin};
     static constexpr auto kDefaultAutoSleepEnabled{false};

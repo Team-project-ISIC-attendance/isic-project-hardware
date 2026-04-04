@@ -87,6 +87,7 @@ private:
     void handlePowerStateChange(const PowerEvent &power);
     [[nodiscard]] bool shouldSleepBetweenScans() const;
     [[nodiscard]] bool shouldDelaySleepAfterRead(std::uint32_t nowMs) const;
+    [[nodiscard]] std::uint32_t getSleepPollIntervalMs() const;
     void enterRecovering(std::uint32_t nowMs);
     bool reinitializePn532();
     bool recoverIrqMode();

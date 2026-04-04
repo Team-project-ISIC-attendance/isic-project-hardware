@@ -157,8 +157,11 @@ void Pn532Service::loop()
                 return;
             }
         }
-        else if (m_useIrqMode)
+        else if (m_useIrqMode && m_powerState == PowerState::Active)
         {
+            // IRQ-while-asleep only works in Active state where PN532 has RF wakeup (0x29).
+            // In LightSleep/ModemSleep the wakeup byte is SPI-only (0x20) so IRQ never fires.
+            // Those states fall through to pollWhileAsleep() below.
             m_irqCurr = digitalRead(m_config.irqPin);
             if (m_irqCurr == LOW && m_irqPrev == HIGH)
             {
@@ -344,9 +347,12 @@ void Pn532Service::handleWakeRead()
         return;
     }
 
+    // After PowerDown RF wakeup, PN532 is freshly re-initialized (SAMConfig called in wakeup()).
+    // There is no pending InListPassiveTarget response, so readDetectedPassiveTargetID() would fail.
+    // Do a fresh poll instead — the card is still in field since it triggered the wakeup.
     std::uint8_t uid[7]{};
     std::uint8_t uidLength{};
-    if (m_pn532->readDetectedPassiveTargetID(uid, &uidLength))
+    if (m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, m_config.readTimeoutMs))
     {
         ++m_metrics.sleepWakeReads;
         publishCardEvent(uid, uidLength);
@@ -362,9 +368,22 @@ void Pn532Service::handleWakeRead()
 }
 
 
+std::uint32_t Pn532Service::getSleepPollIntervalMs() const
+{
+    switch (m_powerState)
+    {
+        case PowerState::LightSleep:
+            return 3'000; // 3s — WiFi up, low overhead, student waits ≤3s
+        case PowerState::ModemSleep:
+            return 10'000; // 10s — WiFi off, +~3s reconnect = ≤13s total
+        default:
+            return m_pollIntervalMs; // Active state fallback (polling mode only)
+    }
+}
+
 void Pn532Service::pollWhileAsleep()
 {
-    if (millis() - m_lastPollMs < m_pollIntervalMs)
+    if (millis() - m_lastPollMs < getSleepPollIntervalMs())
     {
         return;
     }
@@ -376,9 +395,37 @@ void Pn532Service::pollWhileAsleep()
         return;
     }
 
+    static constexpr std::uint32_t kSleepScanWindowMs{800};
+    bool cardFound = false;
     std::uint8_t uid[7]{};
     std::uint8_t uidLength{};
-    if (m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, m_config.readTimeoutMs))
+
+    if (m_useIrqMode)
+    {
+        // Use the same proven 2-step path as active IRQ mode:
+        // start detection → watch IRQ pin for LOW → read.
+        // readPassiveTargetID (blocking SPI poll) misses cards here — IRQ method is reliable.
+        m_pn532->startPassiveTargetIDDetection(PN532_MIFARE_ISO14443A);
+        const auto deadline = millis() + kSleepScanWindowMs;
+        while (millis() < deadline)
+        {
+            if (digitalRead(m_config.irqPin) == LOW)
+            {
+                if (m_pn532->readDetectedPassiveTargetID(uid, &uidLength))
+                {
+                    cardFound = true;
+                }
+                break;
+            }
+            delay(5);
+        }
+    }
+    else
+    {
+        cardFound = m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, kSleepScanWindowMs);
+    }
+
+    if (cardFound)
     {
         ++m_metrics.sleepWakeReads;
         publishCardEvent(uid, uidLength);
@@ -387,6 +434,7 @@ void Pn532Service::pollWhileAsleep()
 
     if (shouldSleepBetweenScans())
     {
+        waitForIrqHigh(50);
         enterSleep();
     }
 }
@@ -511,21 +559,21 @@ bool Pn532Service::wakeup()
     // 2. Calls SAMConfig() to restore normal mode
     m_pn532->wakeup();
 
-    // Small delay to allow PN532 to fully wake and configure
-    delay(10);
-
-    // Verify the PN532 is responding correctly
-    const auto version = m_pn532->getFirmwareVersion();
-    if (!version)
+    // SAMConfig (called inside wakeup) pulls IRQ LOW during its response, then releases.
+    // Wait for IRQ HIGH before proceeding — otherwise the SPI bus is dirty and the first
+    // readPassiveTargetID command gets corrupted.
+    if (m_useIrqMode)
     {
-        ++m_metrics.wakeFailures;
-        LOG_ERROR(m_name, "PN532 wakeup failed - no firmware version response");
-        
-        // Don't update state - still considered asleep
-        return false;
+        if (!waitForIrqHigh(100))
+        {
+            LOG_WARN(m_name, "IRQ did not go HIGH after wakeup — proceeding anyway");
+        }
+    }
+    else
+    {
+        delay(30);
     }
 
-    // PN532 successfully woke up and is responding
     m_isAsleep = false;
     m_pn532State = Pn532State::Ready;
     m_detectionStarted = false;
@@ -537,7 +585,7 @@ bool Pn532Service::wakeup()
         m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
     }
 
-    LOG_INFO(m_name, "PN532 woke from PowerDown successfully (FW: 0x%08X)", version);
+    LOG_INFO(m_name, "PN532 woke from PowerDown successfully");
     return true;
 }
 

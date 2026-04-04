@@ -325,7 +325,7 @@ void WiFiService::loop()
         }
         case WiFiState::WaitingRetry: {
             // Non-blocking retry delay
-            if (millis() - m_lastDisconnectMs >= 100)
+            if (!m_powerSleepActive && millis() - m_lastDisconnectMs >= 100)
             {
                 connectToStation();
             }
@@ -537,7 +537,7 @@ void WiFiService::handleConnected()
 
 void WiFiService::handleDisconnected()
 {
-    if (!m_config.isConfigured())
+    if (m_powerSleepActive || !m_config.isConfigured())
     {
         return;
     }

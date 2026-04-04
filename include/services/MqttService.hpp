@@ -85,6 +85,7 @@ private:
     MqttState m_mqttState{MqttState::Disconnected};
     MqttMetrics m_metrics{};
     bool m_wifiReady{false};
+    bool m_powerSleepActive{false};
 
     std::uint32_t m_lastConnectAttemptMs{0};
     std::uint32_t m_consecutiveFailures{0};
