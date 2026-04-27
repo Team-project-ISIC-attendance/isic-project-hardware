@@ -27,6 +27,7 @@ Firmware for an ISIC attendance reader built around ESP8266/ESP32, PN532, MQTT, 
 - [User Manual](docs/USER_MANUAL.md)
 - [Developer Manual](docs/DEVELOPER_MANUAL.md)
 - [Architecture And Layers](docs/ARCHITECTURE.md) - authoritative deep technical reference
+- [MQTT API](docs/MQTT_API.md) - backend-facing topic and payload reference
 - [Battery Consumption](docs/BATTERY_CONSUMPTION.md)
 - [Memory Optimization](docs/MEMORY_OPTIMIZATION.md)
 

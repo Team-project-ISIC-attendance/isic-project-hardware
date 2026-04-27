@@ -15,6 +15,9 @@ The architecture manual is the main deep technical reference for the codebase st
 - [Architecture And Layers](ARCHITECTURE.md)
   Authoritative technical reference: full class catalog, layer map, runtime diagrams, shared types, and power architecture.
 
+- [MQTT API](MQTT_API.md)
+  Backend integration reference for board topics, payloads, and config paths.
+
 ## Supporting References
 
 - [Battery Consumption](BATTERY_CONSUMPTION.md)
