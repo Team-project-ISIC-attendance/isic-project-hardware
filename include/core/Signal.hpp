@@ -14,6 +14,8 @@
 
 #include <algorithm>
 #include <functional>
+#include <memory>
+#include <new>
 #include <tuple>
 #include <type_traits>
 #include <vector>
@@ -157,8 +159,16 @@ public:
     {
         LockGuard<Mutex> lock(other.m_mutex);
         m_slots = std::move(other.m_slots);
+        m_snapshot = std::move(other.m_snapshot);
+        m_pendingEvents = std::move(other.m_pendingEvents);
+        m_pendingRead = other.m_pendingRead;
+        m_pendingWrite = other.m_pendingWrite;
+        m_pendingCount = other.m_pendingCount;
         m_nextId = other.m_nextId;
         other.m_nextId = 0;
+        other.m_pendingRead = 0;
+        other.m_pendingWrite = 0;
+        other.m_pendingCount = 0;
     }
 
     Signal &operator=(Signal &&other) noexcept
@@ -168,8 +178,16 @@ public:
             UniqueLock<Mutex> lockThis(m_mutex);
             UniqueLock<Mutex> lockOther(other.m_mutex);
             m_slots = std::move(other.m_slots);
+            m_snapshot = std::move(other.m_snapshot);
+            m_pendingEvents = std::move(other.m_pendingEvents);
+            m_pendingRead = other.m_pendingRead;
+            m_pendingWrite = other.m_pendingWrite;
+            m_pendingCount = other.m_pendingCount;
             m_nextId = other.m_nextId;
             other.m_nextId = 0;
+            other.m_pendingRead = 0;
+            other.m_pendingWrite = 0;
+            other.m_pendingCount = 0;
         }
         return *this;
     }
@@ -195,7 +213,7 @@ public:
 
         LockGuard<Mutex> lock(m_mutex);
 
-        // Pre-allocate to avoid fragmentation on ESP8266
+        // Allocate lazily so unused event types do not consume heap at boot.
         if (m_slots.empty())
         {
             m_slots.reserve(kInitialSlotCapacity);
@@ -277,6 +295,15 @@ public:
 
         LockGuard<Mutex> lock(m_mutex);
 
+        if (!m_pendingEvents)
+        {
+            m_pendingEvents.reset(new (std::nothrow) PendingEvent[kMaxPendingEvents]);
+            if (!m_pendingEvents)
+            {
+                return false;
+            }
+        }
+
         // Ring buffer overflow: drop oldest event
         if (m_pendingCount >= kMaxPendingEvents)
         {
@@ -327,7 +354,7 @@ public:
             // Extract one event under lock
             {
                 LockGuard<Mutex> lock(m_mutex);
-                if (m_pendingCount > 0)
+                if (m_pendingEvents && m_pendingCount > 0)
                 {
                     event = std::move(m_pendingEvents[m_pendingRead]);
                     m_pendingRead = (m_pendingRead + 1) % kMaxPendingEvents;
@@ -393,20 +420,23 @@ private:
 
     void invokeCallbacks(PendingEvent &event)
     {
-        std::vector<Slot> slotsCopy;
-
-        // Copy subscriber list under lock
+        // Copy subscriber list under lock into a reusable snapshot buffer.
+        // This avoids heap allocations on every event dispatch.
         {
-            LockGuard<Mutex> lock(m_mutex);
+            UniqueLock<Mutex> lock(m_mutex);
             if (m_slots.empty())
             {
                 return;
             }
-            slotsCopy = m_slots;
+            if (m_snapshot.capacity() < m_slots.size())
+            {
+                m_snapshot.reserve(std::max(kInitialSlotCapacity, m_slots.size()));
+            }
+            m_snapshot = m_slots;
         }
 
         // Invoke with mutex unlocked (allows re-entrant operations)
-        for (const auto &slot: slotsCopy)
+        for (const auto &slot: m_snapshot)
         {
             if (slot.callback)
             {
@@ -415,18 +445,24 @@ private:
         }
     }
 
-    /// Ring buffer capacity - tuned for ESP8266 memory constraints
+    /// Ring buffer capacity - small enough for RAM pressure, but large enough
+    /// to handle short bursts such as split config responses on ESP8266.
+#if defined(ISIC_PLATFORM_ESP8266)
+    static constexpr std::size_t kMaxPendingEvents{12};
+#else
     static constexpr std::size_t kMaxPendingEvents{8};
+#endif
 
-    /// Initial slot vector capacity to avoid early reallocations
-    static constexpr std::size_t kInitialSlotCapacity{8};
+    /// Initial slot vector capacity - most event types have few subscribers.
+    static constexpr std::size_t kInitialSlotCapacity{2};
 
     mutable Mutex m_mutex;
     std::vector<Slot> m_slots;
+    std::vector<Slot> m_snapshot;
     Connection m_nextId{0};
 
     // Ring buffer for async event dispatch
-    PendingEvent m_pendingEvents[kMaxPendingEvents];
+    std::unique_ptr<PendingEvent[]> m_pendingEvents{};
     std::size_t m_pendingRead{0};
     std::size_t m_pendingWrite{0};
     std::size_t m_pendingCount{0};

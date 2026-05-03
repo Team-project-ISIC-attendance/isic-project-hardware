@@ -51,6 +51,7 @@ Notes:
 
 - `config/set/#` accepts either a full config object or a single section object.
 - `config/get/#` ignores payload contents.
+- On `ESP8266`, `config/get` is answered as multiple smaller section responses (`config/wifi`, `config/mqtt`, etc.) instead of one large `config` payload to avoid OOM.
 - The firmware does not publish an explicit ack or error topic for `config/set`.
 - Config payloads include credential fields such as Wi-Fi and MQTT passwords in plain JSON.
 

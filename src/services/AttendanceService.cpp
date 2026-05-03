@@ -9,14 +9,27 @@ namespace isic
 {
 namespace
 {
+inline constexpr bool kUseMockAttendanceTimestamp{true};
+inline constexpr std::uint64_t kMockAttendanceStartUnixMs{1'774'602'000'000ULL}; // 2026-03-27 10:00:00 +0100
+
 bool hasTimeElapsed(const std::uint32_t startMs, const std::uint32_t nowMs, const std::uint32_t thresholdMs) noexcept
 {
     return (nowMs - startMs) >= thresholdMs;
 }
 
+std::optional<std::uint64_t> getAttendanceUnixTimeMs() noexcept
+{
+    if constexpr (kUseMockAttendanceTimestamp)
+    {
+        return kMockAttendanceStartUnixMs + static_cast<std::uint64_t>(millis());
+    }
+
+    return platform::getUnixTimeMs();
+}
+
 void serializeRecord(const JsonObject &obj, const AttendanceRecord &record)
 {
-    const auto unixMs{platform::getUnixTimeMs()};
+    const auto unixMs{getAttendanceUnixTimeMs()};
     obj["uid"] = cardUidToString(record.cardUid);
     obj["ts"] = unixMs.value_or(0); // TODO: handle missing unix time, for now set to 0 backend must handle it
     obj["seq"] = record.sequence;

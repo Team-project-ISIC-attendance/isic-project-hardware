@@ -1,3 +1,7 @@
+#define private public
+#include <Adafruit_PN532.h>
+#undef private
+
 #include "services/Pn532Service.hpp"
 
 #include "common/Logger.hpp"
@@ -6,6 +10,32 @@
 
 namespace isic
 {
+namespace
+{
+constexpr std::uint8_t kPn532PowerDownResponseLength{9};
+constexpr std::uint8_t kPn532PowerDownResponseCode{0x17};
+constexpr std::uint8_t kPn532PowerDownStatusOk{0x00};
+
+constexpr std::uint8_t kPn532WakeupSourceRfLevel{0x01};
+constexpr std::uint8_t kPn532WakeupSourceHsu{0x02};
+constexpr std::uint8_t kPn532WakeupSourceSpi{0x04};
+constexpr std::uint8_t kPn532GenerateIrqOnWake{0x01};
+
+bool readPowerDownResponse(Adafruit_PN532 &pn532, std::uint8_t &status)
+{
+    std::uint8_t response[kPn532PowerDownResponseLength]{};
+    pn532.readdata(response, sizeof(response));
+
+    if (response[6] != kPn532PowerDownResponseCode)
+    {
+        return false;
+    }
+
+    status = response[7];
+    return true;
+}
+} // namespace
+
 void IRAM_ATTR Pn532Service::isrTrampoline()
 {
     if (s_activeInstance)
@@ -159,8 +189,8 @@ void Pn532Service::loop()
         }
         else if (m_useIrqMode && m_powerState == PowerState::Active)
         {
-            // IRQ-while-asleep only works in Active state where PN532 has RF wakeup (0x29).
-            // In LightSleep/ModemSleep the wakeup byte is SPI-only (0x20) so IRQ never fires.
+            // IRQ-while-asleep only works in Active state where PN532 is allowed to wake on RF
+            // level detection and assert IRQ after wake.
             // Those states fall through to pollWhileAsleep() below.
             m_irqCurr = digitalRead(m_config.irqPin);
             if (m_irqCurr == LOW && m_irqPrev == HIGH)
@@ -476,46 +506,49 @@ bool Pn532Service::enterSleep()
     // PN532 PowerDown command (0x16)
     // Reference: https://forums.adafruit.com/viewtopic.php?t=70344
     //
-    // WakeUpEnable byte (parameter) controls wakeup sources:
-    // - Bit 7: Generate IRQ if wakeup source is I2C, SPI, HSU, or GPIO
-    // - Bit 6: Enable wakeup on I2C address match
-    // - Bit 5: Enable wakeup on SPI chip select (critical for SPI mode!)
-    // - Bit 4: Enable wakeup on HSU
-    // - Bit 3: Enable wakeup on RF level detector (card detection)
-    // - Bit 2-1: Reserved
-    // - Bit 0: Generate IRQ if wakeup source is RF level detector
-    //
-    // For SPI mode with card detection wakeup:
-    // - Bit 5 (0x20): SPI wakeup - REQUIRED for SPI mode
-    // - Bit 3 (0x08): RF level detector wakeup - enables card detection during sleep
-    // - Bit 0 (0x01): Generate IRQ on RF wakeup - pulls IRQ pin low when card detected
+    // PowerDown uses a WakeUpEnable bitmask plus an optional GenerateIRQ parameter.
+    // For SPI boards the SPI wake source is bit 2 (0x04), not bit 5.
+    std::uint8_t wakeupSources{kPn532WakeupSourceSpi};
+    std::uint8_t cmd[3]{0x16, wakeupSources, 0x00};
+    std::uint8_t cmdLength{2};
 
-    std::uint8_t wakeupSources{0x20}; // Bit 5: Enable SPI wakeup (required for SPI mode)
-
-    // Enable RF field detection wakeup and IRQ generation
     if (m_irqWakeupEnabled)
     {
-        wakeupSources |= 0x08; // Bit 3: Enable RF level detector wakeup
-        wakeupSources |= 0x01; // Bit 0: Generate IRQ when card detected
+        wakeupSources |= kPn532WakeupSourceRfLevel;
+        cmd[2] = kPn532GenerateIrqOnWake;
+        cmdLength = 3;
         LOG_INFO(m_name, "PN532 will generate IRQ on card detection during sleep");
     }
+    else
+    {
+        LOG_INFO(m_name, "PN532 sleep wakeup limited to SPI host activity");
+    }
 
-    // Prepare PowerDown command
-    uint8_t cmd[2]{0x16, wakeupSources}; // Command byte + WakeUpEnable byte
+    cmd[1] = wakeupSources;
 
     // Send PowerDown command and check for ACK
-    // Important: After ACK, the PN532 sends a response frame, then enters sleep
-    // The library's sendCommandCheckAck will handle the ACK verification
-    if (!m_pn532->sendCommandCheckAck(cmd, 2, 100))
+    if (!m_pn532->sendCommandCheckAck(cmd, cmdLength, 100))
     {
         LOG_ERROR(m_name, "Failed to send PowerDown command - no ACK received");
         return false;
     }
 
-    // TODO: Wakeup behavior:
-    // - If bit 0 is set: IRQ pin goes LOW when card detected
-    // - ESP32 can use this to wake from deep sleep via ext0/ext1 wakeup
-    // - Call wakeup() after ESP32 wakes to restore PN532 to normal operation
+    // PowerDown still emits a normal response frame after the ACK. If we leave that
+    // unread, IRQ can stay asserted and the next wake/detect cycle becomes unreliable.
+    std::uint8_t powerDownStatus{kPn532PowerDownStatusOk};
+    if (!readPowerDownResponse(*m_pn532, powerDownStatus))
+    {
+        LOG_ERROR(m_name, "Invalid PowerDown response frame");
+        return false;
+    }
+    if (powerDownStatus != kPn532PowerDownStatusOk)
+    {
+        LOG_ERROR(m_name, "PN532 rejected PowerDown command (status=0x%02X)", powerDownStatus);
+        return false;
+    }
+
+    // The PN532 needs about 1ms after the response before it is reliably in PowerDown.
+    delay(1);
 
     m_isAsleep = true;
     m_detectionStarted = false;

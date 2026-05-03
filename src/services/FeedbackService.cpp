@@ -76,19 +76,13 @@ FeedbackService::FeedbackService(EventBus &bus, FeedbackConfig &config)
         digitalWrite(m_config.buzzerPin, LOW);
     }
 
-    m_eventConnections.reserve(6);
+    m_eventConnections.reserve(4);
 
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::CardScanned, [this](const Event &) {
         queuePattern(PATTERN_CARD_SCANNED);
     }));
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::AttendanceRecorded, [this](const Event &) {
         signalSuccess();
-    }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
-        signalConnected();
-    }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::WifiDisconnected, [this](const Event &) {
-        signalDisconnected();
     }));
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::OtaStarted, [this](const Event &) {
         signalOtaStart();
@@ -139,7 +133,6 @@ Status FeedbackService::begin()
     if (m_config.buzzerEnabled && m_config.buzzerPin != 0xFF)
     {
         pinMode(m_config.buzzerPin, OUTPUT);
-        noTone(m_config.buzzerPin);
         digitalWrite(m_config.buzzerPin, LOW);
         LOG_DEBUG(m_name, "Buzzer GPIO%u, freq=%uHz", m_config.buzzerPin, m_config.beepFrequencyHz);
     }
@@ -386,11 +379,15 @@ void FeedbackService::setBuzzer(const bool on, std::uint16_t frequencyHz)
         const auto freq{(frequencyHz > 0) ? frequencyHz : m_config.beepFrequencyHz};
         LOG_DEBUG(m_name, "Buzzer ON %uHz GPIO%u", freq, m_config.buzzerPin);
         tone(m_config.buzzerPin, freq);
+        m_buzzerChannelInitialized = true;
     }
     else
     {
         LOG_DEBUG(m_name, "Buzzer OFF");
-        noTone(m_config.buzzerPin);
+        if (m_buzzerChannelInitialized)
+        {
+            noTone(m_config.buzzerPin);
+        }
         digitalWrite(m_config.buzzerPin, LOW);
     }
 }

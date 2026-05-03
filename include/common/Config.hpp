@@ -67,7 +67,11 @@ struct MqttConfig
 {
     struct Constants
     {
+#ifdef ISIC_PLATFORM_ESP8266
         static constexpr auto kMaxPayloadSizeBytes{4024};
+#else
+        static constexpr auto kMaxPayloadSizeBytes{4024};
+#endif
     };
     static constexpr auto kDefaultBrokerPort{1883};
     static constexpr auto kDefaultBaseTopic{"device"};
@@ -129,11 +133,11 @@ struct DeviceConfig
 struct Pn532Config
 {
 #ifdef ISIC_PLATFORM_ESP8266
-    static constexpr auto kDefaultSpiSckPin{14};
-    static constexpr auto kDefaultSpiMisoPin{12};
-    static constexpr auto kDefaultSpiMosiPin{13};
-    static constexpr auto kDefaultSpiCsPin{5};
-    static constexpr auto kDefaultIrqPin{4};
+    static constexpr auto kDefaultSpiSckPin{14}; // D5
+    static constexpr auto kDefaultSpiMisoPin{12}; // D6
+    static constexpr auto kDefaultSpiMosiPin{13}; // D7
+    static constexpr auto kDefaultSpiCsPin{5}; // D1
+    static constexpr auto kDefaultIrqPin{4}; // D2
 #elif defined(ISIC_PLATFORM_ESP32)
     static constexpr auto kDefaultSpiSckPin{14};
     static constexpr auto kDefaultSpiMisoPin{12};
@@ -238,13 +242,23 @@ struct FeedbackConfig
     };
 
     static constexpr auto kDefaultEnabled{true};
-    static constexpr auto kDefaultLedEnabled{true};
+    static constexpr auto kDefaultLedEnabled{false};
+#ifdef ISIC_PLATFORM_ESP8266
+    static constexpr auto kDefaultLedPin{0xFF};
+    static constexpr auto kDefaultLedRedPin{0xFF};
+    static constexpr auto kDefaultLedGreenPin{0xFF};
+    static constexpr auto kDefaultLedBluePin{0xFF};
+    static constexpr auto kDefaultBuzzerPin{0xFF};
+#elif defined(ISIC_PLATFORM_ESP32)
     static constexpr auto kDefaultLedPin{0xFF};
     static constexpr auto kDefaultLedRedPin{25};
     static constexpr auto kDefaultLedGreenPin{26};
     static constexpr auto kDefaultLedBluePin{23};
-    static constexpr auto kDefaultBuzzerEnabled{true};
     static constexpr auto kDefaultBuzzerPin{32};
+#else
+#error "Unsupported platform"
+#endif
+    static constexpr auto kDefaultBuzzerEnabled{true};
     static constexpr auto kDefaultLedActiveHigh{true}; // common cathode = active high
     static constexpr auto kDefaultBeepFrequencyHz{2'000};
     static constexpr auto kDefaultSuccessBlinkDurationMs{100};

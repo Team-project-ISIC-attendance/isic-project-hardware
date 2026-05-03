@@ -170,10 +170,8 @@ void serializePowerConfig(const JsonObject &power, const PowerConfig &powerConfi
     power["activityTypeMask"] = powerConfig.activityTypeMask;
 }
 
-std::string serializeToJson(const Config &config)
+void serializeToJsonDocument(JsonDocument &doc, const Config &config)
 {
-    JsonDocument doc;
-
     // Version and magic for validation on load
     doc["magic"] = config.magic;
     doc["version"] = config.version;
@@ -213,13 +211,7 @@ std::string serializeToJson(const Config &config)
     // Power
     const auto power{doc["power"].to<JsonObject>()};
     serializePowerConfig(power, config.power);
-
-    std::string result;
-    result.reserve(measureJson(doc) + 1);
-    serializeJson(doc, result);
-    return result;
 }
-
 
 // Macros for parsing fields and setting 'changed' flag if updated, just to reduce code duplication
 #define PARSE_STR(json, key, field)        \
@@ -542,6 +534,7 @@ constexpr auto *kConfigSetTopicSuffix{"config/set"};
 constexpr auto *kConfigGetTopicSuffix{"config/get"};
 constexpr auto *kConfigSetTopic{"config/set/#"};
 constexpr auto *kConfigGetTopic{"config/get/#"};
+constexpr std::uint32_t kConfigResponseHeapReserveBytes{4 * 1024};
 } // namespace
 
 ConfigService::ConfigService(EventBus &bus)
@@ -613,7 +606,7 @@ Status ConfigService::begin()
 
     m_config.wifi.stationSsid = "UPC1548499";
     m_config.wifi.stationPassword = "5bpffkLDjzt8";
-    m_config.mqtt.brokerAddress = "192.168.0.29";
+    m_config.mqtt.brokerAddress = "192.168.0.40";
 
 
     return Status::Ok();
@@ -656,13 +649,15 @@ Status ConfigService::saveNow()
         return Status::Error("File open failed");
     }
 
-    const auto json{serializeToJson(m_config)};
-    const auto written{file.print(json.c_str())};
+    JsonDocument doc;
+    serializeToJsonDocument(doc, m_config);
+    const auto expectedSize{measureJson(doc)};
+    const auto written{serializeJson(doc, file)};
     file.close();
 
-    if (written != json.length())
+    if (written != expectedSize)
     {
-        LOG_ERROR(m_name, "Write incomplete: %u/%u", written, json.length());
+        LOG_ERROR(m_name, "Write incomplete: %u/%u", written, expectedSize);
         return Status::Error("Write failed");
     }
 
@@ -688,20 +683,75 @@ Status ConfigService::load()
         return Status::Error("Open failed");
     }
 
-    const auto json{file.readString()}; // returns Arduino String, but we use c++ types only, use const char*
-    file.close();
-
-    if (json.isEmpty())
+    JsonDocument doc;
+    if (const auto error = deserializeJson(doc, file); error)
     {
-        LOG_ERROR(m_name, "Empty file");
-        return Status::Error("Empty file");
-    }
-
-    if (!deserializeJson(m_name, json.c_str(), m_config))
-    {
-        LOG_ERROR(m_name, "Parse failed");
+        file.close();
+        LOG_ERROR(m_name, "Parse error: %s", error.c_str());
         return Status::Error("Parse failed");
     }
+    file.close();
+
+    if (!doc["magic"].is<std::uint32_t>())
+    {
+        LOG_WARN(m_name, "No magic number in config, may be old version");
+        return Status::Error("Parse failed");
+    }
+    if (const auto magic{doc["magic"].as<std::uint32_t>()}; magic != Config::kMagicNumber)
+    {
+        LOG_ERROR(m_name, "Invalid magic number: 0x%08X (expected 0x%08X)", magic, Config::kMagicNumber);
+        return Status::Error("Parse failed");
+    }
+
+    if (!doc["version"].is<std::uint16_t>())
+    {
+        LOG_WARN(m_name, "No version in config, may be old version");
+        return Status::Error("Parse failed");
+    }
+    if (const auto version{doc["version"].as<std::uint16_t>()}; version != Config::kVersion)
+    {
+        LOG_ERROR(m_name, "Config version mismatch: %u (expected %u)", version, Config::kVersion);
+        return Status::Error("Parse failed");
+    }
+
+    auto changed{false};
+    if (doc["wifi"].is<JsonObject>())
+    {
+        changed |= deserializeWifiConfig(doc["wifi"], m_config.wifi);
+    }
+    if (doc["mqtt"].is<JsonObject>())
+    {
+        changed |= deserializeMqttConfig(doc["mqtt"], m_config.mqtt);
+    }
+    if (doc["device"].is<JsonObject>())
+    {
+        changed |= deserializeDeviceConfig(doc["device"], m_config.device);
+    }
+    if (doc["pn532"].is<JsonObject>())
+    {
+        changed |= deserializePn532Config(doc["pn532"], m_config.pn532);
+    }
+    if (doc["attendance"].is<JsonObject>())
+    {
+        changed |= deserializeAttendanceConfig(doc["attendance"], m_config.attendance);
+    }
+    if (doc["feedback"].is<JsonObject>())
+    {
+        changed |= deserializeFeedbackConfig(doc["feedback"], m_config.feedback);
+    }
+    if (doc["health"].is<JsonObject>())
+    {
+        changed |= deserializeHealthConfig(doc["health"], m_config.health);
+    }
+    if (doc["ota"].is<JsonObject>())
+    {
+        changed |= deserializeOtaConfig(doc["ota"], m_config.ota);
+    }
+    if (doc["power"].is<JsonObject>())
+    {
+        changed |= deserializePowerConfig(doc["power"], m_config.power);
+    }
+    (void) changed;
 
     LOG_INFO(m_name, "Loaded");
     return Status::Ok();
@@ -791,6 +841,33 @@ void ConfigService::handleSetConfigMessage(const std::string &topic, const std::
 
 void ConfigService::handleGetConfigMessage(const std::string &topic)
 {
+    const auto publishSectionResponse = [this](const char *sectionTopic, const auto &serializeSection) {
+        JsonDocument sectionDoc;
+        const auto obj{sectionDoc.to<JsonObject>()};
+        serializeSection(obj);
+
+        std::string sectionPayload{};
+        const auto jsonSize = measureJson(sectionDoc);
+        const auto freeHeap = ESP.getFreeHeap();
+        if ((jsonSize + kConfigResponseHeapReserveBytes) > freeHeap)
+        {
+            LOG_ERROR(m_name,
+                      "Skipping %s response: need %u bytes (+%u reserve), heap=%u",
+                      sectionTopic,
+                      jsonSize,
+                      kConfigResponseHeapReserveBytes,
+                      freeHeap);
+            sectionPayload = R"({"error":"insufficient_heap_for_config_response"})";
+        }
+        else
+        {
+            sectionPayload.reserve(jsonSize + 1);
+            serializeJson(sectionDoc, sectionPayload);
+        }
+
+        m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = sectionTopic, .payload = std::move(sectionPayload)}});
+    };
+
     JsonDocument doc;
     std::string payload{};
     std::string responseTopic{"config"};
@@ -860,8 +937,22 @@ void ConfigService::handleGetConfigMessage(const std::string &topic)
     }
     else
     {
+#if defined(ISIC_PLATFORM_ESP8266)
+        LOG_INFO(m_name, "Getting full config as section responses for ESP8266");
+        publishSectionResponse("config/wifi", [this](const JsonObject &obj) { serializeWifiConfig(obj, m_config.wifi); });
+        publishSectionResponse("config/mqtt", [this](const JsonObject &obj) { serializeMqttConfig(obj, m_config.mqtt); });
+        publishSectionResponse("config/device", [this](const JsonObject &obj) { serializeDeviceConfig(obj, m_config.device); });
+        publishSectionResponse("config/pn532", [this](const JsonObject &obj) { serializePn532Config(obj, m_config.pn532); });
+        publishSectionResponse("config/attendance", [this](const JsonObject &obj) { serializeAttendanceConfig(obj, m_config.attendance); });
+        publishSectionResponse("config/feedback", [this](const JsonObject &obj) { serializeFeedbackConfig(obj, m_config.feedback); });
+        publishSectionResponse("config/health", [this](const JsonObject &obj) { serializeHealthConfig(obj, m_config.health); });
+        publishSectionResponse("config/ota", [this](const JsonObject &obj) { serializeOtaConfig(obj, m_config.ota); });
+        publishSectionResponse("config/power", [this](const JsonObject &obj) { serializePowerConfig(obj, m_config.power); });
+        return;
+#else
         LOG_INFO(m_name, "Getting full config");
-        payload = serializeToJson(m_config);
+        serializeToJsonDocument(doc, m_config);
+#endif
     }
 
     if (payload.empty())

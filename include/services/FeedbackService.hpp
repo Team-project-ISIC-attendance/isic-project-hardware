@@ -86,6 +86,7 @@ private:
     bool m_enabled{true};
     LedColor m_ledCurrentColor{LedColor::Off};
     bool m_buzzerCurrentState{false};
+    bool m_buzzerChannelInitialized{false};
 
     // Subscribed events
     std::vector<EventBus::ScopedConnection> m_eventConnections{};

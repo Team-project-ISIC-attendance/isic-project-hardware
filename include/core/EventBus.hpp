@@ -14,6 +14,7 @@
 #include "core/Signal.hpp"
 
 #include <array>
+#include <memory>
 #include <utility>
 
 namespace isic
@@ -97,11 +98,12 @@ public:
      */
     [[nodiscard]] Connection subscribe(const EventType type, Callback &&callback)
     {
-        if (type >= EventType::_Count)
+        auto *signal = ensureSignal(type);
+        if (!signal)
         {
             return 0;
         }
-        return m_signals[static_cast<std::size_t>(type)].connect(std::move(callback));
+        return signal->connect(std::move(callback));
     }
 
     /**
@@ -120,11 +122,12 @@ public:
      */
     [[nodiscard]] ScopedConnection subscribeScoped(const EventType type, Callback &&callback)
     {
-        if (type >= EventType::_Count)
+        auto *signal = ensureSignal(type);
+        if (!signal)
         {
             return {};
         }
-        return m_signals[static_cast<std::size_t>(type)].connectScoped(std::move(callback));
+        return signal->connectScoped(std::move(callback));
     }
 
     /**
@@ -139,11 +142,12 @@ public:
      */
     void unsubscribe(const EventType type, const Connection connection)
     {
-        if (type >= EventType::_Count)
+        auto *signal = getSignal(type);
+        if (!signal)
         {
             return;
         }
-        m_signals[static_cast<std::size_t>(type)].disconnect(connection);
+        signal->disconnect(connection);
     }
 
     /**
@@ -164,11 +168,12 @@ public:
      */
     bool publish(Event &&event)
     {
-        if (event.type >= EventType::_Count)
+        auto *signal = getSignal(event.type);
+        if (!signal)
         {
             return false;
         }
-        return m_signals[static_cast<std::size_t>(event.type)].publish(std::move(event));
+        return signal->publish(std::move(event));
     }
 
     /**
@@ -212,7 +217,10 @@ public:
         std::size_t totalDispatched{0};
         for (auto &signal: m_signals)
         {
-            totalDispatched += signal.dispatch();
+            if (signal)
+            {
+                totalDispatched += signal->dispatch();
+            }
         }
         return totalDispatched;
     }
@@ -230,13 +238,54 @@ public:
         std::size_t total{0};
         for (const auto &signal: m_signals)
         {
-            total += signal.pendingCount();
+            if (signal)
+            {
+                total += signal->pendingCount();
+            }
         }
         return total;
     }
 
 private:
-    std::array<SignalType, static_cast<std::size_t>(EventType::_Count)> m_signals;
+    using SignalPtr = std::unique_ptr<SignalType>;
+
+    [[nodiscard]] SignalType *getSignal(const EventType type) noexcept
+    {
+        if (type >= EventType::_Count)
+        {
+            return nullptr;
+        }
+
+        return m_signals[static_cast<std::size_t>(type)].get();
+    }
+
+    [[nodiscard]] const SignalType *getSignal(const EventType type) const noexcept
+    {
+        if (type >= EventType::_Count)
+        {
+            return nullptr;
+        }
+
+        return m_signals[static_cast<std::size_t>(type)].get();
+    }
+
+    [[nodiscard]] SignalType *ensureSignal(const EventType type)
+    {
+        if (type >= EventType::_Count)
+        {
+            return nullptr;
+        }
+
+        auto &signal = m_signals[static_cast<std::size_t>(type)];
+        if (!signal)
+        {
+            signal = std::make_unique<SignalType>();
+        }
+
+        return signal.get();
+    }
+
+    std::array<SignalPtr, static_cast<std::size_t>(EventType::_Count)> m_signals{};
 };
 } // namespace isic
 

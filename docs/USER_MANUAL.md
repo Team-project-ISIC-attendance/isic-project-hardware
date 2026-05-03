@@ -26,6 +26,45 @@ This firmware turns an ESP8266/ESP32 + PN532 device into an attendance reader fo
 - Stable power source or battery pack
 - Wi-Fi network available for normal online operation
 
+## ESP-12F PN532 Wiring
+
+For the normal `esp8266` build, the firmware uses these default ESP-12F / NodeMCU pins:
+
+| PN532 signal | ESP-12F GPIO | NodeMCU label |
+|---|---:|---|
+| `SCK` | `GPIO14` | `D5` |
+| `MISO` | `GPIO12` | `D6` |
+| `MOSI` | `GPIO13` | `D7` |
+| `SS` / `SCS` | `GPIO5` | `D1` |
+| `IRQ` | `GPIO4` | `D2` |
+| `VCC` | `3V3` | `3V3` |
+| `GND` | `GND` | `GND` |
+
+Put the PN532 module in `SPI` mode. The firmware does not require the PN532 reset pin.
+
+## Reconnect From Current ESP32 Default Wiring
+
+If your reader is currently wired for the default ESP32 build, reconnect only the lines below:
+
+| Signal | ESP32 default | ESP-12F target |
+|---|---|---|
+| `IRQ` | `GPIO27` | `GPIO4` / `D2` |
+| `SCK` | `GPIO14` | `GPIO14` / `D5` |
+| `MISO` | `GPIO12` | `GPIO12` / `D6` |
+| `MOSI` | `GPIO13` | `GPIO13` / `D7` |
+| `SS` / `SCS` | `GPIO5` | `GPIO5` / `D1` |
+| `3V3` | `3V3` | `3V3` |
+| `GND` | `GND` | `GND` |
+
+So in practice, SPI power and data wiring stays the same GPIO numbering as the current defaults, and the one required NFC signal move is `PN532 IRQ: ESP32 GPIO27 -> ESP-12F GPIO4/D2`.
+
+The default ESP32 feedback pins do not exist on the ESP-12F profile:
+
+- RGB LED `GPIO25`, `GPIO26`, `GPIO23`
+- buzzer `GPIO32`
+
+Leave those disconnected unless you plan to choose new ESP8266-safe pins and update the feedback config.
+
 ## Power Behavior
 
 The device does not use ESP deep sleep in the main runtime flow.

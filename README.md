@@ -56,8 +56,8 @@ ISIC Card
 
 | Environment | Purpose |
 |---|---|
-| `esp8266` | Primary production target |
-| `esp8266_debug` | Debug-oriented ESP8266 build |
+| `esp8266` | Primary ESP-12F / NodeMCU production target |
+| `esp8266_debug` | Debug-oriented ESP-12F / NodeMCU build |
 | `esp32dev` | Development and validation target |
 | `esp32dev_debug` | Debug-oriented ESP32 build |
 | `esp32_minimal` | Constraint comparison build |
