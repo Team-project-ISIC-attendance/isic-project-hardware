@@ -9,7 +9,7 @@ namespace isic
 {
 namespace
 {
-inline constexpr bool kUseMockAttendanceTimestamp{true};
+inline constexpr bool kUseMockAttendanceTimestamp{false};
 inline constexpr std::uint64_t kMockAttendanceStartUnixMs{1'774'602'000'000ULL}; // 2026-03-27 10:00:00 +0100
 
 bool hasTimeElapsed(const std::uint32_t startMs, const std::uint32_t nowMs, const std::uint32_t thresholdMs) noexcept
