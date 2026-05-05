@@ -186,11 +186,12 @@ void Pn532Service::loop()
         {
             if (!shouldDelaySleepAfterRead(now))
             {
-                if (!enterSleep())
+                if (enterSleep())
                 {
-                    enterRecovering(now);
+                    return;
                 }
-                return;
+                // enterSleep() failed (PN532 busy or SPI error) — fall through to
+                // active scanning so cards are never missed due to a sleep failure.
             }
         }
         else if (m_useIrqMode && m_powerState == PowerState::Active)
@@ -463,30 +464,10 @@ void Pn532Service::pollWhileAsleep()
     std::uint8_t uid[7]{};
     std::uint8_t uidLength{};
 
-    if (m_useIrqMode)
-    {
-        // Use the same proven 2-step path as active IRQ mode:
-        // start detection → watch IRQ pin for LOW → read.
-        // readPassiveTargetID (blocking SPI poll) misses cards here — IRQ method is reliable.
-        m_pn532->startPassiveTargetIDDetection(PN532_MIFARE_ISO14443A);
-        const auto deadline = millis() + kSleepScanWindowMs;
-        while (millis() < deadline)
-        {
-            if (digitalRead(m_config.irqPin) == LOW)
-            {
-                if (m_pn532->readDetectedPassiveTargetID(uid, &uidLength))
-                {
-                    cardFound = true;
-                }
-                break;
-            }
-            delay(5);
-        }
-    }
-    else
-    {
-        cardFound = m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, kSleepScanWindowMs);
-    }
+    // Use blocking readPassiveTargetID for both modes. startPassiveTargetIDDetection() leaves
+    // an InListPassiveTarget command pending if no card is found within the window, which causes
+    // the subsequent enterSleep() PowerDown command to fail (no ACK from busy PN532).
+    cardFound = m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, kSleepScanWindowMs);
 
     if (cardFound)
     {
