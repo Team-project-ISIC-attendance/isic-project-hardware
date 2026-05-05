@@ -85,24 +85,18 @@ Status Pn532Service::begin()
     const auto rev{(version >> 8) & 0xFF};
     LOG_INFO(m_name, "PN532 found: IC=0x%02X ver=%d.%d", ic, ver, rev);
 
-    // Decide between IRQ mode (zero overhead) or polling mode (fallback)
-    m_useIrqMode = m_config.useIrq();
+    // Active scanning always uses polling for reliability.
+    // IRQ is retained only for sleep-wake detection (power management).
+    // Set m_useIrqMode only if we'll actually use IRQ for sleep-wake.
+    const auto &powerConfig = m_configService.getPowerConfig();
+    m_useIrqMode = m_config.irqPin != 0xFF && powerConfig.pn532SleepBetweenScans;
     m_pollIntervalMs = m_config.pollIntervalMs ? m_config.pollIntervalMs : Pn532Config::kDefaultReadTimeoutMs;
     m_powerState = PowerState::Active;
     m_targetPowerMode = Pn532PowerMode::ActiveScan;
     m_powerMode = Pn532PowerMode::ActiveScan;
     m_wakeRetryAtMs = 0;
 
-    // IMPORTANT: For IRQ mode, configure the IRQ pin BEFORE SAMConfig
-    // SAMConfig generates an initial IRQ pulse that we need to ignore
-    if (m_useIrqMode)
-    {
-        pinMode(m_config.irqPin, INPUT_PULLUP);
-        LOG_DEBUG(m_name, "IRQ pin GPIO%d configured before SAMConfig", m_config.irqPin);
-    }
-
     // Configure SAM (Secure Access Module)
-    // Note: SAMConfig temporarily pulls IRQ LOW, then releases it
     if (!m_pn532->SAMConfig())
     {
         LOG_ERROR(m_name, "SAM config failed");
@@ -111,48 +105,32 @@ Status Pn532Service::begin()
         return Status::Error("SAM config failed");
     }
 
-    // Wait for IRQ to stabilize after SAMConfig (it pulses LOW during config)
-    if (m_useIrqMode)
-    {
-        delay(10); // Allow IRQ to return HIGH after SAMConfig
-    }
-
     m_pn532State = Pn532State::Ready;
     setState(ServiceState::Running);
 
+    // Configure IRQ pin for sleep-wake detection only (power management).
+    // For active scanning, polling is always used instead.
     if (m_useIrqMode)
     {
-        // Configure IRQ pin for reading
         pinMode(m_config.irqPin, INPUT_PULLUP);
-        // Enable IRQ-based wakeup if configured for power management
-        const auto &powerConfig = m_configService.getPowerConfig();
-        if (powerConfig.nfcWakeupPin != 0xFF && powerConfig.nfcWakeupPin != m_config.irqPin)
-        {
-            LOG_WARN(m_name, "NFC wakeup pin GPIO%d != PN532 IRQ pin GPIO%d",
-                     powerConfig.nfcWakeupPin,
-                     m_config.irqPin);
-        }
-
         if (enableIrqWakeup())
         {
-            LOG_INFO(m_name, "PN532 IRQ wakeup enabled on GPIO%d", m_config.irqPin);
+            LOG_INFO(m_name, "PN532 IRQ sleep-wake enabled on GPIO%d", m_config.irqPin);
+            m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
         }
         else
         {
-            LOG_WARN(m_name, "Failed to enable PN532 IRQ wakeup");
+            LOG_WARN(m_name, "Failed to enable PN532 IRQ sleep-wake; falling back to polling only");
+            disableIrqWakeup();
+            m_useIrqMode = false;
         }
-
-        // Initialize IRQ state tracking
-        m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
-        LOG_INFO(m_name, "Using IRQ reader mode on GPIO%d (initial state: %s)",
-                 m_config.irqPin,
-                 m_irqCurr == HIGH ? "HIGH" : "LOW");
     }
     else
     {
-        LOG_INFO(m_name, "Using polling mode (interval: %lums)", m_pollIntervalMs);
+        LOG_INFO(m_name, "PN532 sleep configured for polling mode (no IRQ sleep-wake)");
     }
 
+    LOG_INFO(m_name, "Using polling mode for active scans (interval: %lums)", m_pollIntervalMs);
     LOG_INFO(m_name, "Pn532Service ready");
     return Status::Ok();
 }
@@ -242,31 +220,9 @@ void Pn532Service::loop()
         return;
     }
 
-    if (m_useIrqMode)
+    // Polling scan: reliable on all hardware configurations.
+    // IRQ pin is retained for sleep-wake signalling only (pollWhileAsleep / handleWakeRead).
     {
-        // IRQ mode: start detection once, then wait for IRQ to go LOW
-        if (!m_detectionStarted)
-        {
-            startDetection();
-            return;
-        }
-
-        // Poll the IRQ pin state and detect falling edge (HIGH -> LOW)
-        // This is more reliable than hardware interrupts on ESP32 with SPI
-        m_irqCurr = digitalRead(m_config.irqPin);
-
-        // When the IRQ is pulled LOW - the reader has got something for us
-        if (m_irqCurr == LOW && m_irqPrev == HIGH)
-        {
-            LOG_DEBUG(m_name, "Got NFC IRQ (pin went LOW)");
-            handleCardDetected();
-        }
-
-        m_irqPrev = m_irqCurr;
-    }
-    else
-    {
-        // Polling mode: directly poll at configured interval
         const auto pollIntervalMs = lowPowerPollingMode ? getSleepPollIntervalMs() : m_pollIntervalMs;
         const auto readTimeoutMs = lowPowerPollingMode ? getSleepReadTimeoutMs() : m_config.readTimeoutMs;
         if (millis() - m_lastPollMs >= pollIntervalMs)
