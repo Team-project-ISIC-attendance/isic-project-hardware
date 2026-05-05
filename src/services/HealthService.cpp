@@ -17,6 +17,8 @@ constexpr bool isStateHealthy(const HealthState state) noexcept
 
 constexpr auto *kHealthRequestTopic{"health/request"};
 constexpr auto *kMetricsRequestTopic{"metrics/request"};
+constexpr auto *kStatusRequestTopic{"status/request"};
+constexpr auto *kStatusPublishTopic{"status"};
 constexpr auto *kHealthPublishTopic{"health"};
 constexpr auto *kMetricsPublishTopic{"metrics"};
 } // namespace
@@ -35,12 +37,14 @@ HealthService::HealthService(EventBus &bus, HealthConfig &config)
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
         m_mqttConnected = true;
 
+        m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = kStatusRequestTopic, .payload = "", .retain = false}});
         m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = kHealthRequestTopic, .payload = "", .retain = false}});
         m_bus.publish({EventType::MqttSubscribeRequest, MqttEvent{.topic = kMetricsRequestTopic, .payload = "", .retain = false}});
 
         if (m_config.publishToMqtt)
         {
             LOG_DEBUG(m_name, "MQTT connected - scheduling initial status update");
+            m_pendingStatusPublish = true;
             m_pendingHealthPublish = true;
         }
     }));
@@ -52,7 +56,12 @@ HealthService::HealthService(EventBus &bus, HealthConfig &config)
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttMessage, [this](const Event &e) {
         if (const auto *mqtt = e.get<MqttEvent>())
         {
-            if (mqtt->topic.find(kHealthRequestTopic) != std::string::npos)
+            if (mqtt->topic.find(kStatusRequestTopic) != std::string::npos)
+            {
+                LOG_DEBUG(m_name, "Status update requested via MQTT");
+                m_pendingStatusPublish = true;
+            }
+            else if (mqtt->topic.find(kHealthRequestTopic) != std::string::npos)
             {
                 LOG_DEBUG(m_name, "Status update requested via MQTT");
                 m_pendingHealthPublish = true;
@@ -111,6 +120,16 @@ void HealthService::loop()
         m_pendingHealthPublish = false;
     }
 
+    if (m_pendingStatusPublish)
+    {
+        if (!updatedForInterval)
+        {
+            updateSystemHealth();
+        }
+        publishStatusUpdate();
+        m_pendingStatusPublish = false;
+    }
+
     if (m_pendingMetricsPublish)
     {
         publishMetricsUpdate();
@@ -124,7 +143,8 @@ void HealthService::loop()
 
         if (isHealthIntervalElapsed)
         {
-            LOG_DEBUG(m_name, "Periodic health status update");
+            LOG_DEBUG(m_name, "Periodic device status update");
+            publishStatusUpdate();
             publishHealthUpdate();
             m_lastHealthPublishMs = now;
         }
@@ -223,15 +243,39 @@ void HealthService::updateSystemHealth()
                  toString(m_systemHealth.heapState), 
                  toString(m_systemHealth.fragmentationState), 
                  toString(m_systemHealth.wifiState));
+        m_pendingStatusPublish = true;
         m_pendingHealthPublish = true;
     }
     else if (!isCurrentlyUnhealthy && wasUnhealthy)
     {
         LOG_INFO(m_name, "System health recovered");
+        m_pendingStatusPublish = true;
         m_pendingHealthPublish = true;
     }
     
     wasUnhealthy = isCurrentlyUnhealthy;
+}
+
+void HealthService::publishStatusUpdate()
+{
+    if (!m_config.publishToMqtt || !m_mqttConnected)
+    {
+        return;
+    }
+
+    JsonDocument doc;
+    doc["firmware"] = DeviceConfig::Constants::kFirmwareVersion;
+
+    std::string json;
+    json.reserve(measureJson(doc) + 1);
+    serializeJson(doc, json);
+
+    m_bus.publish(Event{EventType::MqttPublishRequest, MqttEvent{
+                                                               .topic = kStatusPublishTopic,
+                                                               .payload = std::move(json),
+                                                               .retain = true}});
+
+    LOG_INFO(m_name, "Published status update");
 }
 
 void HealthService::publishHealthUpdate()

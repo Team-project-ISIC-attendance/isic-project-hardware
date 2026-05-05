@@ -165,6 +165,9 @@ void Pn532Service::loop()
     }
 
     const auto now{millis()};
+    const bool lowPowerPollingMode = !m_useIrqMode &&
+                                     m_targetPowerMode == Pn532PowerMode::PowerDown &&
+                                     shouldSleepBetweenScans();
 
     if (m_powerMode == Pn532PowerMode::Recovering)
     {
@@ -177,21 +180,24 @@ void Pn532Service::loop()
         m_powerMode = m_isAsleep ? Pn532PowerMode::PowerDown : Pn532PowerMode::ActiveScan;
     }
 
-    if (m_targetPowerMode == Pn532PowerMode::PowerDown && shouldSleepBetweenScans())
+    if (m_useIrqMode && m_targetPowerMode == Pn532PowerMode::PowerDown && shouldSleepBetweenScans())
     {
         if (!m_isAsleep)
         {
             if (!shouldDelaySleepAfterRead(now))
             {
-                enterSleep();
+                if (!enterSleep())
+                {
+                    enterRecovering(now);
+                }
                 return;
             }
         }
-        else if (m_useIrqMode && m_powerState == PowerState::Active)
+        else if (m_useIrqMode)
         {
-            // IRQ-while-asleep only works in Active state where PN532 is allowed to wake on RF
-            // level detection and assert IRQ after wake.
-            // Those states fall through to pollWhileAsleep() below.
+            // In PowerDown with IRQ wake enabled, the PN532 pulls IRQ LOW when RF detection
+            // wakes it. This works independently of the ESP WiFi power policy, so keep using
+            // the low-overhead IRQ wake path in all sleep states.
             m_irqCurr = digitalRead(m_config.irqPin);
             if (m_irqCurr == LOW && m_irqPrev == HIGH)
             {
@@ -211,6 +217,12 @@ void Pn532Service::loop()
         }
     }
 
+    if (lowPowerPollingMode)
+    {
+        m_powerMode = Pn532PowerMode::PowerDown;
+        m_isAsleep = false;
+    }
+
     if (m_isAsleep)
     {
         if (!wakeup())
@@ -220,7 +232,10 @@ void Pn532Service::loop()
         }
     }
 
-    m_powerMode = Pn532PowerMode::ActiveScan;
+    if (!lowPowerPollingMode)
+    {
+        m_powerMode = Pn532PowerMode::ActiveScan;
+    }
 
     if (m_pn532State != Pn532State::Ready)
     {
@@ -252,10 +267,12 @@ void Pn532Service::loop()
     else
     {
         // Polling mode: directly poll at configured interval
-        if (millis() - m_lastPollMs >= m_pollIntervalMs)
-    {
-        m_lastPollMs = millis();
-        pollForCard();
+        const auto pollIntervalMs = lowPowerPollingMode ? getSleepPollIntervalMs() : m_pollIntervalMs;
+        const auto readTimeoutMs = lowPowerPollingMode ? getSleepReadTimeoutMs() : m_config.readTimeoutMs;
+        if (millis() - m_lastPollMs >= pollIntervalMs)
+        {
+            m_lastPollMs = millis();
+            pollForCard(readTimeoutMs);
         }
     }
 }
@@ -341,11 +358,11 @@ void Pn532Service::startDetection()
     }
 }
 
-void Pn532Service::pollForCard()
+void Pn532Service::pollForCard(const std::uint32_t timeoutMs)
 {
     std::uint8_t uid[7]{};
     std::uint8_t uidLength{};
-    if (m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, m_config.readTimeoutMs))
+    if (m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, timeoutMs))
     {
         publishCardEvent(uid, uidLength);
     }
@@ -402,12 +419,29 @@ std::uint32_t Pn532Service::getSleepPollIntervalMs() const
 {
     switch (m_powerState)
     {
+        case PowerState::Active:
+            return 150; // Idle but awake: keep taps feeling immediate.
         case PowerState::LightSleep:
-            return 3'000; // 3s — WiFi up, low overhead, student waits ≤3s
+            return 300; // WiFi power-save: slower polling, still sub-second tap response.
         case PowerState::ModemSleep:
-            return 10'000; // 10s — WiFi off, +~3s reconnect = ≤13s total
+            return 750; // WiFi off: save battery, keep first tap comfortably under 1s.
         default:
             return m_pollIntervalMs; // Active state fallback (polling mode only)
+    }
+}
+
+std::uint32_t Pn532Service::getSleepReadTimeoutMs() const
+{
+    switch (m_powerState)
+    {
+        case PowerState::Active:
+            return 90;
+        case PowerState::LightSleep:
+            return 120;
+        case PowerState::ModemSleep:
+            return 180;
+        default:
+            return m_config.readTimeoutMs;
     }
 }
 
@@ -552,6 +586,7 @@ bool Pn532Service::enterSleep()
 
     m_isAsleep = true;
     m_detectionStarted = false;
+    m_lastPollMs = millis();
     m_pn532State = Pn532State::Disabled;
     m_powerMode = Pn532PowerMode::PowerDown;
     ++m_metrics.sleepEntries;
@@ -808,9 +843,20 @@ void Pn532Service::handlePowerStateChange(const PowerEvent &power)
     switch (m_targetPowerMode)
     {
         case Pn532PowerMode::PowerDown:
+            if (!m_useIrqMode)
+            {
+                m_isAsleep = false;
+                m_powerMode = Pn532PowerMode::PowerDown;
+                LOG_INFO(m_name, "Polling low-power mode active (PN532 stays awake, slower scan cadence)");
+                break;
+            }
+
             if (shouldSleepBetweenScans() && m_pn532State == Pn532State::Ready && !shouldDelaySleepAfterRead(millis()))
             {
-                enterSleep();
+                if (!enterSleep())
+                {
+                    enterRecovering(millis());
+                }
             }
             break;
 

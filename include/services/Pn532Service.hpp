@@ -81,13 +81,14 @@ private:
     void startDetection();
     void handleCardDetected();
     void handleWakeRead();
-    void pollForCard();
+    void pollForCard(std::uint32_t timeoutMs);
     void pollWhileAsleep();
     void publishCardEvent(const std::uint8_t *uid, std::uint8_t uidLength);
     void handlePowerStateChange(const PowerEvent &power);
     [[nodiscard]] bool shouldSleepBetweenScans() const;
     [[nodiscard]] bool shouldDelaySleepAfterRead(std::uint32_t nowMs) const;
     [[nodiscard]] std::uint32_t getSleepPollIntervalMs() const;
+    [[nodiscard]] std::uint32_t getSleepReadTimeoutMs() const;
     void enterRecovering(std::uint32_t nowMs);
     bool reinitializePn532();
     bool recoverIrqMode();

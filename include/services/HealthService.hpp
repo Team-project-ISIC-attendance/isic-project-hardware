@@ -47,6 +47,7 @@ public:
     }
 
 private:
+    void publishStatusUpdate();
     void publishHealthUpdate();
     void publishMetricsUpdate();
 
@@ -68,6 +69,7 @@ private:
     std::uint32_t m_lastHealthPublishMs{0};
     std::uint32_t m_lastMetricsPublishMs{0};
     bool m_mqttConnected{false};
+    bool m_pendingStatusPublish{false};
     bool m_pendingHealthPublish{false};
     bool m_pendingMetricsPublish{false};
 
