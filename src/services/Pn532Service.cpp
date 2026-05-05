@@ -193,11 +193,10 @@ void Pn532Service::loop()
                 return;
             }
         }
-        else if (m_useIrqMode)
+        else if (m_useIrqMode && m_powerState == PowerState::Active)
         {
-            // In PowerDown with IRQ wake enabled, the PN532 pulls IRQ LOW when RF detection
-            // wakes it. This works independently of the ESP WiFi power policy, so keep using
-            // the low-overhead IRQ wake path in all sleep states.
+            // IRQ-while-asleep only works reliably in Active state where WiFi is up.
+            // In LightSleep/ModemSleep fall through to pollWhileAsleep() as a fallback.
             m_irqCurr = digitalRead(m_config.irqPin);
             if (m_irqCurr == LOW && m_irqPrev == HIGH)
             {
