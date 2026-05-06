@@ -1,0 +1,12 @@
+services:
+  emulator:
+    build:
+      context: .
+    ports:
+      - "${EMULATOR_HTTP_PORT:-8040}:8040"
+    environment:
+      MQTT_BROKER_HOST: ${MQTT_BROKER_HOST:-host.docker.internal}
+      MQTT_BROKER_PORT: ${MQTT_BROKER_PORT:-1883}
+      EMULATOR_DEFAULT_BASE_TOPIC: ${EMULATOR_DEFAULT_BASE_TOPIC:-device}
+      EMULATOR_DEFAULT_DEVICE_ID: ${EMULATOR_DEFAULT_DEVICE_ID:-ISIC-ESP8266-001}
+    restart: unless-stopped

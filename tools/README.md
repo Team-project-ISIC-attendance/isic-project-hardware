@@ -7,6 +7,7 @@ This directory contains various development and testing tools for the ISIC proje
 | Tool | Description |
 |------|-------------|
 | [mqtt-broker/](mqtt-broker/) | Docker-based MQTT broker for local testing |
+| [simulator/](simulator/) | Browser-based Python MQTT hardware emulator UI with its own Docker Compose |
 | [esp_fs_inspector.py](esp_fs_inspector.py) | Python utility to inspect ESP filesystem over serial |
 
 ---
@@ -320,4 +321,3 @@ curl http://localhost:8081/upload
 ```bash
 docker compose down
 ```
-

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "isic-hardware-emulator"
+version = "0.1.0"
+description = "Browser-based Python MQTT UI for emulating ISIC hardware"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115.12",
+    "uvicorn>=0.34.2",
+    "aiomqtt>=2.1.0",
+    "pydantic>=2.8.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.3",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

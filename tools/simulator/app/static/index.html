@@ -1,0 +1,1179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ISIC Hardware Emulator</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4efe6;
+        --panel: #fffaf2;
+        --panel-strong: #fff;
+        --border: #d9c7ab;
+        --text: #231f17;
+        --muted: #6b6253;
+        --accent: #a6401c;
+        --accent-strong: #7f2f14;
+        --good: #1e6b45;
+        --bad: #962d3e;
+        --shadow: 0 16px 40px rgba(77, 47, 17, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", serif;
+        background:
+          radial-gradient(circle at top left, rgba(166, 64, 28, 0.14), transparent 22rem),
+          linear-gradient(180deg, #fbf6ed 0%, var(--bg) 100%);
+        color: var(--text);
+      }
+
+      .shell {
+        display: grid;
+        grid-template-columns: 24rem 1fr;
+        min-height: 100vh;
+      }
+
+      .sidebar,
+      .content {
+        padding: 1.25rem;
+      }
+
+      .sidebar {
+        border-right: 1px solid var(--border);
+        background: rgba(255, 250, 242, 0.9);
+        backdrop-filter: blur(10px);
+      }
+
+      .content {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 1rem;
+        box-shadow: var(--shadow);
+        padding: 1rem;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0 0 0.6rem;
+        font-weight: 700;
+      }
+
+      h1 {
+        font-size: 1.7rem;
+      }
+
+      h2 {
+        font-size: 1.1rem;
+      }
+
+      p,
+      label,
+      small {
+        color: var(--muted);
+      }
+
+      p {
+        margin: 0;
+        line-height: 1.45;
+      }
+
+      .stack {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .grid {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .grid.two {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .grid.three {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .grid.four {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .field {
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .field label {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      .field small {
+        font-size: 0.82rem;
+      }
+
+      input,
+      textarea,
+      select,
+      button {
+        width: 100%;
+        border-radius: 0.75rem;
+        border: 1px solid var(--border);
+        padding: 0.72rem 0.85rem;
+        font: inherit;
+      }
+
+      textarea {
+        min-height: 10rem;
+        resize: vertical;
+        font-family: "Source Code Pro", "SFMono-Regular", monospace;
+        background: #fffefb;
+      }
+
+      input,
+      select {
+        background: #fffefb;
+      }
+
+      button {
+        background: var(--accent);
+        color: #fff6ee;
+        border: none;
+        cursor: pointer;
+        transition: transform 0.12s ease, background 0.12s ease;
+      }
+
+      button:hover {
+        background: var(--accent-strong);
+        transform: translateY(-1px);
+      }
+
+      button.secondary {
+        background: #e9dac2;
+        color: var(--text);
+      }
+
+      button.secondary:hover {
+        background: #dfcfb5;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.35rem 0.65rem;
+        border-radius: 999px;
+        font-size: 0.85rem;
+        background: #f0e2cb;
+        color: var(--text);
+      }
+
+      .pill.ok {
+        background: rgba(30, 107, 69, 0.12);
+        color: var(--good);
+      }
+
+      .pill.warn {
+        background: rgba(150, 45, 62, 0.12);
+        color: var(--bad);
+      }
+
+      .device-list {
+        display: grid;
+        gap: 0.5rem;
+      }
+
+      .device-item {
+        padding: 0.8rem;
+        border-radius: 0.9rem;
+        border: 1px solid var(--border);
+        background: var(--panel-strong);
+        cursor: pointer;
+      }
+
+      .device-item.active {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 1px var(--accent);
+      }
+
+      .device-item strong {
+        display: block;
+      }
+
+      .device-item small {
+        display: block;
+      }
+
+      .row {
+        display: flex;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+      }
+
+      .row > * {
+        flex: 1 1 10rem;
+      }
+
+      .toolbar {
+        display: flex;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+      }
+
+      .toolbar > * {
+        flex: 1 1 12rem;
+      }
+
+      .hero {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 0.9fr);
+        align-items: start;
+      }
+
+      .hero-card {
+        padding: 1.2rem;
+      }
+
+      .hero-title {
+        display: grid;
+        gap: 0.45rem;
+      }
+
+      .hero-title p {
+        max-width: 58rem;
+      }
+
+      .status-grid {
+        display: grid;
+        gap: 0.75rem;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .status-block {
+        padding: 0.95rem;
+        border-radius: 0.9rem;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.6);
+      }
+
+      .status-block strong,
+      .status-block code {
+        display: block;
+        color: var(--text);
+      }
+
+      .status-block span {
+        display: block;
+        margin-bottom: 0.35rem;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .hint-list {
+        display: grid;
+        gap: 0.7rem;
+      }
+
+      .hint-item {
+        padding: 0.85rem 0.95rem;
+        border-radius: 0.85rem;
+        border: 1px dashed var(--border);
+        background: rgba(255, 252, 247, 0.72);
+      }
+
+      .hint-item strong {
+        display: block;
+        margin-bottom: 0.25rem;
+      }
+
+      .sidebar-summary {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .sidebar-summary-header {
+        display: grid;
+        gap: 0.25rem;
+      }
+
+      .sidebar-summary-grid {
+        display: grid;
+        gap: 0.65rem;
+      }
+
+      .sidebar-summary-item {
+        padding: 0.85rem 0.95rem;
+        border-radius: 0.85rem;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.62);
+      }
+
+      .sidebar-summary-item span {
+        display: block;
+        margin-bottom: 0.3rem;
+        font-size: 0.76rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .sidebar-summary-item strong,
+      .sidebar-summary-item code {
+        display: block;
+        color: var(--text);
+      }
+
+      .sidebar-summary-item small {
+        display: block;
+        margin-top: 0.25rem;
+      }
+
+      .section-heading {
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .section-heading p {
+        max-width: 48rem;
+      }
+
+      .topics,
+      .events {
+        max-height: 16rem;
+        overflow: auto;
+        border-radius: 0.75rem;
+        border: 1px solid var(--border);
+        background: #fffcf7;
+      }
+
+      .topics ul,
+      .events ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+
+      .topics li,
+      .events li {
+        border-bottom: 1px solid rgba(217, 199, 171, 0.6);
+        padding: 0.7rem 0.85rem;
+      }
+
+      .events code,
+      .topics code,
+      .json-preview {
+        font-family: "Source Code Pro", "SFMono-Regular", monospace;
+      }
+
+      .json-preview {
+        white-space: pre-wrap;
+        background: #fffefb;
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+        padding: 0.8rem;
+        min-height: 8rem;
+        overflow: auto;
+      }
+
+      .message {
+        padding: 0.75rem 0.9rem;
+        border-radius: 0.8rem;
+        background: rgba(30, 107, 69, 0.1);
+        color: var(--good);
+        display: none;
+      }
+
+      .message.error {
+        background: rgba(150, 45, 62, 0.1);
+        color: var(--bad);
+      }
+
+      @media (max-width: 1100px) {
+        .shell {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .grid.two,
+        .grid.three,
+        .grid.four,
+        .hero,
+        .status-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar stack">
+        <div class="card sidebar-summary">
+          <div class="sidebar-summary-header">
+            <h1>Simulator Control</h1>
+            <p>MQTT hardware test device.</p>
+          </div>
+          <div class="sidebar-summary-grid">
+            <div class="sidebar-summary-item">
+              <span>Broker</span>
+              <strong id="sidebar-broker">host.docker.internal:1883</strong>
+              <small id="broker-pill">MQTT target</small>
+            </div>
+            <div class="sidebar-summary-item">
+              <span>Selected device</span>
+              <strong id="sidebar-device">No device selected</strong>
+              <small id="sidebar-prefix">Pick a device from the list</small>
+            </div>
+            <div class="sidebar-summary-item">
+              <span>Main topic</span>
+              <code id="sidebar-topic">device/.../attendance</code>
+              <small id="sidebar-mode">Auto reply disabled</small>
+            </div>
+            <div class="row">
+              <div class="pill ok" id="device-pill">0 devices</div>
+            </div>
+          </div>
+          <div class="message" id="message"></div>
+        </div>
+
+        <div class="card stack">
+          <div class="section-heading">
+            <h2>Virtual Devices</h2>
+            <p>Click a device to edit it or use it for publishing.</p>
+          </div>
+          <div class="device-list" id="device-list"></div>
+        </div>
+
+        <div class="card stack">
+          <div class="section-heading">
+            <h2>Device Profile</h2>
+            <p>
+              Saved here and used for automatic replies to backend request
+              topics.
+            </p>
+          </div>
+          <div class="grid two">
+            <div class="field">
+              <label for="base-topic">Base topic</label>
+              <input id="base-topic" placeholder="device" />
+            </div>
+            <div class="field">
+              <label for="device-id">Device ID</label>
+              <input id="device-id" placeholder="ISIC-ESP8266-001" />
+            </div>
+          </div>
+          <div class="grid two">
+            <div class="field">
+              <label for="firmware">Firmware version</label>
+              <input id="firmware" placeholder="simulator-1.0.0" />
+            </div>
+            <div class="field">
+              <label for="location-id">Location ID</label>
+              <input id="location-id" placeholder="LAB-01" />
+            </div>
+          </div>
+          <div class="grid two">
+            <div class="field">
+              <label for="next-seq">Next sequence</label>
+              <input id="next-seq" type="number" min="1" placeholder="1" />
+            </div>
+            <div class="field">
+              <label for="auto-respond">Automatic replies</label>
+              <select id="auto-respond">
+                <option value="true">Auto respond enabled</option>
+                <option value="false">Auto respond disabled</option>
+              </select>
+            </div>
+          </div>
+          <button id="save-device">Save Device</button>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section class="hero">
+          <div class="card hero-card stack">
+            <div class="hero-title">
+              <h1>Hardware Test Console</h1>
+              <p>
+                Select or create a virtual device, then publish scans or device
+                snapshots into MQTT. The backend, frontend, and broker keep
+                running normally. This page only simulates hardware behavior.
+              </p>
+            </div>
+            <div class="status-grid">
+              <div class="status-block">
+                <span>Broker</span>
+                <strong id="summary-broker">Not connected</strong>
+                <small>MQTT target used by the simulator</small>
+              </div>
+              <div class="status-block">
+                <span>Selected Device</span>
+                <strong id="summary-device">No device selected</strong>
+                <small id="summary-prefix">Pick a device from the left panel</small>
+              </div>
+              <div class="status-block">
+                <span>Firmware</span>
+                <strong id="summary-firmware">-</strong>
+                <small id="summary-auto-respond">Auto reply disabled</small>
+              </div>
+              <div class="status-block">
+                <span>Fast Path</span>
+                <code id="summary-attendance-topic">device/.../attendance</code>
+                <small>Most common topic for attendance tests</small>
+              </div>
+            </div>
+          </div>
+
+          <div class="card hero-card stack">
+            <div class="section-heading">
+              <h2>How To Use It</h2>
+              <p>Normal testing flow for backend and UI work.</p>
+            </div>
+            <div class="hint-list">
+              <div class="hint-item">
+                <strong>1. Pick a device</strong>
+                Use the left panel to select an existing virtual device or save a
+                new one.
+              </div>
+              <div class="hint-item">
+                <strong>2. Publish attendance</strong>
+                Put one UID per line, then send a batch to test scan ingestion.
+              </div>
+              <div class="hint-item">
+                <strong>3. Test requests</strong>
+                Leave auto respond enabled if you want backend MQTT requests to
+                get simulated replies.
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="grid two">
+          <div class="card stack">
+            <div class="section-heading">
+              <h2>Attendance Scan</h2>
+              <p>
+                One UID per line. Each entry becomes one attendance record in the
+                same published batch.
+              </p>
+            </div>
+            <div class="field">
+              <label for="uids">UID list</label>
+              <textarea id="uids">04A1B2C3D4</textarea>
+              <small>Example: one ISIC UID on each line.</small>
+            </div>
+            <div class="grid three">
+              <div class="field">
+                <label for="timestamp-mode">Timestamp mode</label>
+                <select id="timestamp-mode">
+                  <option value="now">Timestamp now</option>
+                  <option value="zero">Timestamp 0</option>
+                  <option value="custom">Custom ms</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="timestamp-ms">Custom timestamp</label>
+                <input id="timestamp-ms" type="number" min="0" placeholder="custom timestamp ms" />
+              </div>
+              <button id="publish-attendance">Publish Attendance</button>
+            </div>
+          </div>
+
+          <div class="card stack">
+            <div class="section-heading">
+              <h2>Quick Actions</h2>
+              <p>Common hardware messages for the selected virtual device.</p>
+            </div>
+            <div class="toolbar">
+              <button id="publish-status">Publish Status</button>
+              <button id="publish-health">Publish Health</button>
+              <button id="publish-metrics">Publish Metrics</button>
+              <button id="simulate-ota">Simulate OTA</button>
+              <button class="secondary" id="clear-events">Clear Traffic</button>
+            </div>
+            <div class="grid two">
+              <div class="field">
+                <label for="ota-version">OTA version</label>
+                <input id="ota-version" placeholder="OTA version" value="simulator-1.0.1" />
+              </div>
+              <div class="field">
+                <label for="ota-fail">OTA failure point</label>
+                <input id="ota-fail" type="number" min="0" max="100" placeholder="fail at percent (optional)" />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="grid two">
+          <div class="card stack">
+            <div class="section-heading">
+              <h2>Payload Editors</h2>
+              <p>Edit saved templates first, then publish them when needed.</p>
+            </div>
+            <div class="grid two">
+              <div class="field">
+                <label for="payload-kind">Payload kind</label>
+                <select id="payload-kind">
+                  <option value="status">status</option>
+                  <option value="health">health</option>
+                  <option value="metrics">metrics</option>
+                  <option value="config">config</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="config-section">Config section</label>
+                <select id="config-section">
+                  <option value="">full config</option>
+                  <option value="wifi">wifi</option>
+                  <option value="mqtt">mqtt</option>
+                  <option value="device">device</option>
+                  <option value="pn532">pn532</option>
+                  <option value="attendance">attendance</option>
+                  <option value="feedback">feedback</option>
+                  <option value="health">health</option>
+                  <option value="ota">ota</option>
+                  <option value="power">power</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="payload-editor">Payload JSON</label>
+              <textarea id="payload-editor"></textarea>
+            </div>
+            <div class="toolbar">
+              <button id="save-payload">Save Into Device</button>
+              <button id="publish-payload">Publish Payload</button>
+            </div>
+          </div>
+
+          <div class="card stack">
+            <div class="section-heading">
+              <h2>Raw MQTT Publish</h2>
+              <p>Use this for edge cases outside the hardware contract.</p>
+            </div>
+            <div class="field">
+              <label for="raw-topic">Raw topic</label>
+              <input id="raw-topic" placeholder="topic" />
+            </div>
+            <div class="field">
+              <label for="raw-payload">Raw payload</label>
+              <textarea id="raw-payload">{}</textarea>
+            </div>
+            <div class="grid two">
+              <div class="field">
+                <label for="raw-retain">Retain flag</label>
+                <select id="raw-retain">
+                  <option value="false">retain false</option>
+                  <option value="true">retain true</option>
+                </select>
+              </div>
+              <button id="publish-raw">Publish Raw</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="grid two">
+          <div class="card stack">
+            <div>
+              <h2>Seen Topics</h2>
+              <p>Everything the emulator listener has seen on the broker.</p>
+            </div>
+            <div class="topics">
+              <ul id="topic-list"></ul>
+            </div>
+          </div>
+
+          <div class="card stack">
+            <div>
+              <h2>Selected Device Preview</h2>
+              <p>Current payload snapshot for the selected virtual device.</p>
+            </div>
+            <div class="json-preview" id="device-preview"></div>
+          </div>
+        </section>
+
+        <section class="card stack">
+          <div>
+            <h2>MQTT Traffic</h2>
+            <p>
+              Outgoing publishes are marked before sending. Incoming events show
+              broker traffic, including replies received back from the emulator.
+            </p>
+          </div>
+          <div class="events">
+            <ul id="event-list"></ul>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const state = {
+        devices: [],
+        selectedKey: null,
+        seenTopics: [],
+        events: [],
+      };
+      let lastHydratedKey = null;
+
+      const els = {
+        brokerPill: document.getElementById("broker-pill"),
+        devicePill: document.getElementById("device-pill"),
+        deviceList: document.getElementById("device-list"),
+        message: document.getElementById("message"),
+        baseTopic: document.getElementById("base-topic"),
+        deviceId: document.getElementById("device-id"),
+        firmware: document.getElementById("firmware"),
+        locationId: document.getElementById("location-id"),
+        nextSeq: document.getElementById("next-seq"),
+        autoRespond: document.getElementById("auto-respond"),
+        uids: document.getElementById("uids"),
+        timestampMode: document.getElementById("timestamp-mode"),
+        timestampMs: document.getElementById("timestamp-ms"),
+        payloadKind: document.getElementById("payload-kind"),
+        configSection: document.getElementById("config-section"),
+        payloadEditor: document.getElementById("payload-editor"),
+        rawTopic: document.getElementById("raw-topic"),
+        rawPayload: document.getElementById("raw-payload"),
+        rawRetain: document.getElementById("raw-retain"),
+        otaVersion: document.getElementById("ota-version"),
+        otaFail: document.getElementById("ota-fail"),
+        sidebarBroker: document.getElementById("sidebar-broker"),
+        sidebarDevice: document.getElementById("sidebar-device"),
+        sidebarPrefix: document.getElementById("sidebar-prefix"),
+        sidebarTopic: document.getElementById("sidebar-topic"),
+        sidebarMode: document.getElementById("sidebar-mode"),
+        summaryBroker: document.getElementById("summary-broker"),
+        summaryDevice: document.getElementById("summary-device"),
+        summaryPrefix: document.getElementById("summary-prefix"),
+        summaryFirmware: document.getElementById("summary-firmware"),
+        summaryAutoRespond: document.getElementById("summary-auto-respond"),
+        summaryAttendanceTopic: document.getElementById("summary-attendance-topic"),
+        topicList: document.getElementById("topic-list"),
+        devicePreview: document.getElementById("device-preview"),
+        eventList: document.getElementById("event-list"),
+      };
+
+      function showMessage(text, isError = false) {
+        els.message.textContent = text;
+        els.message.className = isError ? "message error" : "message";
+        els.message.style.display = "block";
+        window.clearTimeout(showMessage.timer);
+        showMessage.timer = window.setTimeout(() => {
+          els.message.style.display = "none";
+        }, 3000);
+      }
+
+      function selectedDevice() {
+        return state.devices.find((device) => device.key === state.selectedKey) || null;
+      }
+
+      function prettyJson(value) {
+        return JSON.stringify(value, null, 2);
+      }
+
+      function syncFormFromDevice(device) {
+        if (!device) {
+          return;
+        }
+        els.baseTopic.value = device.base_topic;
+        els.deviceId.value = device.device_id;
+        els.firmware.value = device.firmware;
+        els.locationId.value = device.location_id;
+        els.nextSeq.value = device.next_seq;
+        els.autoRespond.value = String(device.auto_respond);
+        syncPayloadEditor();
+        syncRawTopic();
+        renderPreview();
+      }
+
+      function syncPayloadEditor() {
+        const device = selectedDevice();
+        if (!device) {
+          els.payloadEditor.value = "{}";
+          return;
+        }
+        const kind = els.payloadKind.value;
+        if (kind === "status") {
+          els.payloadEditor.value = prettyJson(device.status_payload);
+        } else if (kind === "health") {
+          els.payloadEditor.value = prettyJson(device.health_payload);
+        } else if (kind === "metrics") {
+          els.payloadEditor.value = prettyJson(device.metrics_payload);
+        } else {
+          const section = els.configSection.value;
+          els.payloadEditor.value = prettyJson(
+            section ? device.config_payload?.[section] || {} : device.config_payload || {},
+          );
+        }
+      }
+
+      function syncRawTopic() {
+        const device = selectedDevice();
+        if (!device) {
+          return;
+        }
+        els.rawTopic.value = `${device.prefix}/attendance`;
+      }
+
+      function renderSummary() {
+        const device = selectedDevice();
+        els.summaryBroker.textContent = els.brokerPill.textContent;
+        els.sidebarBroker.textContent = els.brokerPill.textContent;
+        if (!device) {
+          els.summaryDevice.textContent = "No device selected";
+          els.summaryPrefix.textContent = "Pick a device from the left panel";
+          els.summaryFirmware.textContent = "-";
+          els.summaryAutoRespond.textContent = "Auto reply disabled";
+          els.summaryAttendanceTopic.textContent = "device/.../attendance";
+          els.sidebarDevice.textContent = "No device selected";
+          els.sidebarPrefix.textContent = "Pick a device from the list";
+          els.sidebarTopic.textContent = "device/.../attendance";
+          els.sidebarMode.textContent = "Auto reply disabled";
+          return;
+        }
+
+        els.summaryDevice.textContent = device.device_id;
+        els.summaryPrefix.textContent = `${device.base_topic} base topic`;
+        els.summaryFirmware.textContent = device.firmware || "-";
+        els.summaryAutoRespond.textContent = device.auto_respond
+          ? "Auto reply enabled for backend requests"
+          : "Auto reply disabled";
+        els.summaryAttendanceTopic.textContent = `${device.prefix}/attendance`;
+        els.sidebarDevice.textContent = device.device_id;
+        els.sidebarPrefix.textContent = `${device.base_topic} base topic`;
+        els.sidebarTopic.textContent = `${device.prefix}/attendance`;
+        els.sidebarMode.textContent = device.auto_respond
+          ? "Auto reply enabled"
+          : "Auto reply disabled";
+      }
+
+      function renderDevices() {
+        els.deviceList.innerHTML = "";
+        state.devices.forEach((device) => {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = `device-item${device.key === state.selectedKey ? " active" : ""}`;
+          item.innerHTML = `
+            <strong>${device.device_id}</strong>
+            <small>${device.base_topic}</small>
+            <small>${device.auto_respond ? "auto reply on" : "auto reply off"}</small>
+          `;
+          item.addEventListener("click", () => {
+            state.selectedKey = device.key;
+            renderDevices();
+            syncFormFromDevice(device);
+            renderSummary();
+          });
+          els.deviceList.appendChild(item);
+        });
+        els.devicePill.textContent = `${state.devices.length} devices`;
+      }
+
+      function renderTopics() {
+        els.topicList.innerHTML = "";
+        state.seenTopics.forEach((topic) => {
+          const li = document.createElement("li");
+          li.innerHTML = `<code>${topic}</code>`;
+          els.topicList.appendChild(li);
+        });
+      }
+
+      function renderEvents() {
+        els.eventList.innerHTML = "";
+        [...state.events].reverse().forEach((event) => {
+          const li = document.createElement("li");
+          li.innerHTML = `
+            <div class="row">
+              <span class="pill ${event.direction === "system" ? "" : event.direction === "out" ? "ok" : "warn"}">${event.direction}</span>
+              <strong>${event.topic}</strong>
+              <small>${new Date(event.timestamp).toLocaleString()}</small>
+            </div>
+            <div><code>${escapeHtml(event.payload)}</code></div>
+            ${event.note ? `<small>${escapeHtml(event.note)}</small>` : ""}
+          `;
+          els.eventList.appendChild(li);
+        });
+      }
+
+      function renderPreview() {
+        const device = selectedDevice();
+        els.devicePreview.textContent = device ? prettyJson(device) : "No device selected";
+      }
+
+      function escapeHtml(value) {
+        return value
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      }
+
+      async function fetchState(forceHydrate = false) {
+        const response = await fetch("/api/state");
+        if (!response.ok) {
+          throw new Error("Failed to load emulator state");
+        }
+        const data = await response.json();
+        state.devices = data.devices;
+        state.events = data.events;
+        state.seenTopics = data.seen_topics;
+        if (!state.selectedKey && state.devices.length) {
+          state.selectedKey = state.devices[0].key;
+        }
+        if (state.selectedKey && !state.devices.find((item) => item.key === state.selectedKey)) {
+          state.selectedKey = state.devices[0]?.key || null;
+        }
+        els.brokerPill.textContent = `${data.broker_host}:${data.broker_port}`;
+        renderDevices();
+        renderTopics();
+        renderEvents();
+        renderPreview();
+        renderSummary();
+        if (forceHydrate || lastHydratedKey !== state.selectedKey) {
+          syncFormFromDevice(selectedDevice());
+          lastHydratedKey = state.selectedKey;
+        }
+      }
+
+      async function postJson(url, payload) {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+          const detail = await response.text();
+          throw new Error(detail);
+        }
+        return response.json();
+      }
+
+      async function saveDevice() {
+        const selected = selectedDevice();
+        const payload = {
+          previous_key: selected?.key || null,
+          base_topic: els.baseTopic.value.trim(),
+          device_id: els.deviceId.value.trim(),
+          firmware: els.firmware.value.trim(),
+          location_id: els.locationId.value.trim(),
+          next_seq: Number(els.nextSeq.value || 1),
+          auto_respond: els.autoRespond.value === "true",
+          status_payload: selected?.status_payload,
+          health_payload: selected?.health_payload,
+          metrics_payload: selected?.metrics_payload,
+          config_payload: selected?.config_payload,
+        };
+        await postJson("/api/devices", payload);
+        state.selectedKey = `${payload.base_topic}/${payload.device_id}`;
+        await fetchState(true);
+        showMessage("Virtual device saved");
+      }
+
+      function payloadRequestBody() {
+        const device = selectedDevice();
+        if (!device) {
+          throw new Error("No device selected");
+        }
+        return {
+          base_topic: device.base_topic,
+          device_id: device.device_id,
+          payload: JSON.parse(els.payloadEditor.value),
+        };
+      }
+
+      async function savePayload() {
+        const device = selectedDevice();
+        if (!device) {
+          throw new Error("No device selected");
+        }
+        const payload = JSON.parse(els.payloadEditor.value);
+        if (els.payloadKind.value === "status") {
+          device.status_payload = payload;
+        } else if (els.payloadKind.value === "health") {
+          device.health_payload = payload;
+        } else if (els.payloadKind.value === "metrics") {
+          device.metrics_payload = payload;
+        } else {
+          const section = els.configSection.value;
+          if (section) {
+            device.config_payload = { ...device.config_payload, [section]: payload };
+          } else {
+            device.config_payload = payload;
+          }
+        }
+        await postJson("/api/devices", {
+          base_topic: device.base_topic,
+          device_id: device.device_id,
+          firmware: device.firmware,
+          location_id: device.location_id,
+          next_seq: device.next_seq,
+          auto_respond: device.auto_respond,
+          status_payload: device.status_payload,
+          health_payload: device.health_payload,
+          metrics_payload: device.metrics_payload,
+          config_payload: device.config_payload,
+        });
+        await fetchState(true);
+        showMessage("Payload saved into device profile");
+      }
+
+      async function publishPayload() {
+        const kind = els.payloadKind.value;
+        if (kind === "config") {
+          const device = selectedDevice();
+          if (!device) {
+            throw new Error("No device selected");
+          }
+          await postJson("/api/publish/config", {
+            base_topic: device.base_topic,
+            device_id: device.device_id,
+            section: els.configSection.value || null,
+            payload: JSON.parse(els.payloadEditor.value),
+          });
+        } else {
+          await postJson(`/api/publish/${kind}`, payloadRequestBody());
+        }
+        await fetchState(true);
+        showMessage(`${kind} published`);
+      }
+
+      async function publishQuick(kind) {
+        const device = selectedDevice();
+        if (!device) {
+          throw new Error("No device selected");
+        }
+        const payload = device[`${kind}_payload`];
+        await postJson(`/api/publish/${kind}`, {
+          base_topic: device.base_topic,
+          device_id: device.device_id,
+          payload,
+        });
+        await fetchState(true);
+        showMessage(`${kind} published`);
+      }
+
+      async function publishAttendance() {
+        const device = selectedDevice();
+        if (!device) {
+          throw new Error("No device selected");
+        }
+        const uids = els.uids.value
+          .split("\n")
+          .map((item) => item.trim())
+          .filter(Boolean);
+        await postJson("/api/publish/attendance", {
+          base_topic: device.base_topic,
+          device_id: device.device_id,
+          uids,
+          timestamp_mode: els.timestampMode.value,
+          timestamp_ms: els.timestampMs.value ? Number(els.timestampMs.value) : null,
+        });
+        await fetchState(true);
+        showMessage("Attendance batch published");
+      }
+
+      async function publishRaw() {
+        await postJson("/api/publish/raw", {
+          topic: els.rawTopic.value.trim(),
+          payload: els.rawPayload.value,
+          retain: els.rawRetain.value === "true",
+        });
+        await fetchState(true);
+        showMessage("Raw MQTT message published");
+      }
+
+      async function simulateOta() {
+        const device = selectedDevice();
+        if (!device) {
+          throw new Error("No device selected");
+        }
+        await postJson("/api/publish/ota", {
+          base_topic: device.base_topic,
+          device_id: device.device_id,
+          version: els.otaVersion.value.trim(),
+          fail_at_percent: els.otaFail.value ? Number(els.otaFail.value) : null,
+        });
+        await fetchState(true);
+        showMessage("OTA simulation finished");
+      }
+
+      async function clearEvents() {
+        await postJson("/api/events/clear", {});
+        await fetchState(true);
+        showMessage("Traffic cleared");
+      }
+
+      document.getElementById("save-device").addEventListener("click", () =>
+        handleAction(saveDevice),
+      );
+      document.getElementById("publish-attendance").addEventListener("click", () =>
+        handleAction(publishAttendance),
+      );
+      document.getElementById("publish-status").addEventListener("click", () =>
+        handleAction(() => publishQuick("status")),
+      );
+      document.getElementById("publish-health").addEventListener("click", () =>
+        handleAction(() => publishQuick("health")),
+      );
+      document.getElementById("publish-metrics").addEventListener("click", () =>
+        handleAction(() => publishQuick("metrics")),
+      );
+      document.getElementById("simulate-ota").addEventListener("click", () =>
+        handleAction(simulateOta),
+      );
+      document.getElementById("publish-raw").addEventListener("click", () =>
+        handleAction(publishRaw),
+      );
+      document.getElementById("save-payload").addEventListener("click", () =>
+        handleAction(savePayload),
+      );
+      document.getElementById("publish-payload").addEventListener("click", () =>
+        handleAction(publishPayload),
+      );
+      document.getElementById("clear-events").addEventListener("click", () =>
+        handleAction(clearEvents),
+      );
+      els.payloadKind.addEventListener("change", syncPayloadEditor);
+      els.configSection.addEventListener("change", syncPayloadEditor);
+
+      async function handleAction(action) {
+        try {
+          await action();
+        } catch (error) {
+          showMessage(error.message || String(error), true);
+        }
+      }
+
+      async function boot() {
+        await fetchState();
+        window.setInterval(() => {
+          fetchState().catch((error) => {
+            showMessage(error.message || String(error), true);
+          });
+        }, 1500);
+      }
+
+      boot().catch((error) => showMessage(error.message || String(error), true));
+    </script>
+  </body>
+</html>
