@@ -421,6 +421,8 @@ struct Pn532Metrics
     std::uint32_t readErrors{0};
     std::uint32_t successfulReads{0};
     std::uint32_t recoveryAttempts{0};
+    std::uint32_t activeIrqFailures{0};
+    std::uint32_t activePollFallbackEntries{0};
     std::uint32_t sleepEntries{0};
     std::uint32_t earlySleepEntries{0};
     std::uint32_t irqWakeups{0};

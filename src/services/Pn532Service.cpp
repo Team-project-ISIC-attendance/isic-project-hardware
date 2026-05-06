@@ -21,6 +21,9 @@ constexpr std::uint8_t kPn532WakeupSourceHsu{0x02};
 constexpr std::uint8_t kPn532WakeupSourceSpi{0x04};
 constexpr std::uint8_t kPn532GenerateIrqOnWake{0x01};
 
+constexpr std::uint32_t kActivePollingFallbackIntervalMs{75};
+constexpr std::uint32_t kActivePollingFallbackTimeoutMs{30};
+
 bool readPowerDownResponse(Adafruit_PN532 &pn532, std::uint8_t &status)
 {
     std::uint8_t response[kPn532PowerDownResponseLength]{};
@@ -85,18 +88,37 @@ Status Pn532Service::begin()
     const auto rev{(version >> 8) & 0xFF};
     LOG_INFO(m_name, "PN532 found: IC=0x%02X ver=%d.%d", ic, ver, rev);
 
-    // Active scanning always uses polling for reliability.
-    // IRQ is retained only for sleep-wake detection (power management).
-    // Set m_useIrqMode only if we'll actually use IRQ for sleep-wake.
     const auto &powerConfig = m_configService.getPowerConfig();
-    m_useIrqMode = m_config.irqPin != 0xFF && powerConfig.pn532SleepBetweenScans;
+    m_activeIrqConfigured = m_config.useIrq();
+    m_activeIrqEnabled = m_activeIrqConfigured;
+    m_activePollingFallback = false;
+    m_sleepIrqWakeEnabled = powerConfig.enableNfcWakeup &&
+                            powerConfig.pn532SleepBetweenScans &&
+                            m_config.irqPin != 0xFF;
+    if (m_sleepIrqWakeEnabled && powerConfig.nfcWakeupPin != 0xFF && powerConfig.nfcWakeupPin != m_config.irqPin)
+    {
+        LOG_WARN(m_name, "NFC wakeup pin GPIO%d != PN532 IRQ pin GPIO%d; disabling sleep IRQ wake",
+                 powerConfig.nfcWakeupPin,
+                 m_config.irqPin);
+        m_sleepIrqWakeEnabled = false;
+    }
+
+    m_irqWakeupEnabled = false;
+    m_detectionStarted = false;
+    m_lastDetectionFailureMs = 0;
+    m_activeIrqRetryAtMs = 0;
     m_pollIntervalMs = m_config.pollIntervalMs ? m_config.pollIntervalMs : Pn532Config::kDefaultReadTimeoutMs;
     m_powerState = PowerState::Active;
     m_targetPowerMode = Pn532PowerMode::ActiveScan;
     m_powerMode = Pn532PowerMode::ActiveScan;
     m_wakeRetryAtMs = 0;
+    m_consecutiveErrors = 0;
 
-    // Configure SAM (Secure Access Module)
+    if (m_activeIrqConfigured || m_sleepIrqWakeEnabled)
+    {
+        pinMode(m_config.irqPin, INPUT_PULLUP);
+    }
+
     if (!m_pn532->SAMConfig())
     {
         LOG_ERROR(m_name, "SAM config failed");
@@ -108,29 +130,48 @@ Status Pn532Service::begin()
     m_pn532State = Pn532State::Ready;
     setState(ServiceState::Running);
 
-    // Configure IRQ pin for sleep-wake detection only (power management).
-    // For active scanning, polling is always used instead.
-    if (m_useIrqMode)
+    if (m_activeIrqConfigured)
     {
         pinMode(m_config.irqPin, INPUT_PULLUP);
-        if (enableIrqWakeup())
+        if (!waitForIrqHigh(100))
         {
-            LOG_INFO(m_name, "PN532 IRQ sleep-wake enabled on GPIO%d", m_config.irqPin);
-            m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
+            activateActivePollingFallback(millis(), "IRQ did not stabilize after SAMConfig");
         }
         else
         {
-            LOG_WARN(m_name, "Failed to enable PN532 IRQ sleep-wake; falling back to polling only");
-            disableIrqWakeup();
-            m_useIrqMode = false;
+            m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
+            LOG_INFO(m_name, "Active scan mode -> irq-primary on GPIO%d", m_config.irqPin);
         }
     }
     else
     {
-        LOG_INFO(m_name, "PN532 sleep configured for polling mode (no IRQ sleep-wake)");
+        LOG_INFO(m_name, "Active scan mode -> polling-only (IRQ unavailable)");
     }
 
-    LOG_INFO(m_name, "Using polling mode for active scans (interval: %lums)", m_pollIntervalMs);
+    if (m_sleepIrqWakeEnabled)
+    {
+        const auto sleepWakeConfigured = enableIrqWakeup();
+        m_sleepIrqWakeEnabled = sleepWakeConfigured;
+        if (sleepWakeConfigured)
+        {
+            if (!waitForIrqHigh(100))
+            {
+                LOG_WARN(m_name, "IRQ did not return HIGH after sleep wake configuration");
+            }
+            m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
+            LOG_INFO(m_name, "PN532 IRQ sleep-wake enabled on GPIO%d", m_config.irqPin);
+        }
+        else
+        {
+            disableIrqWakeup();
+            LOG_WARN(m_name, "Failed to enable PN532 IRQ sleep-wake; using awake fallback when idle");
+        }
+    }
+    else
+    {
+        LOG_INFO(m_name, "PN532 sleep configured without IRQ wake");
+    }
+
     LOG_INFO(m_name, "Pn532Service ready");
     return Status::Ok();
 }
@@ -143,9 +184,10 @@ void Pn532Service::loop()
     }
 
     const auto now{millis()};
-    const bool lowPowerPollingMode = !m_useIrqMode &&
+    const bool lowPowerPollingMode = !m_sleepIrqWakeEnabled &&
                                      m_targetPowerMode == Pn532PowerMode::PowerDown &&
-                                     shouldSleepBetweenScans();
+                                     shouldSleepBetweenScans() &&
+                                     !isUsingActiveIrqPrimary();
 
     if (m_powerMode == Pn532PowerMode::Recovering)
     {
@@ -158,7 +200,9 @@ void Pn532Service::loop()
         m_powerMode = m_isAsleep ? Pn532PowerMode::PowerDown : Pn532PowerMode::ActiveScan;
     }
 
-    if (m_useIrqMode && m_targetPowerMode == Pn532PowerMode::PowerDown && shouldSleepBetweenScans())
+    maybeRecoverActiveIrq(now);
+
+    if (m_sleepIrqWakeEnabled && m_targetPowerMode == Pn532PowerMode::PowerDown && shouldSleepBetweenScans())
     {
         if (!m_isAsleep)
         {
@@ -168,14 +212,10 @@ void Pn532Service::loop()
                 {
                     return;
                 }
-                // enterSleep() failed (PN532 busy or SPI error) — fall through to
-                // active scanning so cards are never missed due to a sleep failure.
             }
         }
-        else if (m_useIrqMode && m_powerState == PowerState::Active)
+        else if (m_powerState == PowerState::Active)
         {
-            // IRQ-while-asleep only works reliably in Active state where WiFi is up.
-            // In LightSleep/ModemSleep fall through to pollWhileAsleep() as a fallback.
             m_irqCurr = digitalRead(m_config.irqPin);
             if (m_irqCurr == LOW && m_irqPrev == HIGH)
             {
@@ -220,16 +260,30 @@ void Pn532Service::loop()
         return;
     }
 
-    // Polling scan: reliable on all hardware configurations.
-    // IRQ pin is retained for sleep-wake signalling only (pollWhileAsleep / handleWakeRead).
+    if (isUsingActiveIrqPrimary())
     {
-        const auto pollIntervalMs = lowPowerPollingMode ? getSleepPollIntervalMs() : m_pollIntervalMs;
-        const auto readTimeoutMs = lowPowerPollingMode ? getSleepReadTimeoutMs() : m_config.readTimeoutMs;
-        if (millis() - m_lastPollMs >= pollIntervalMs)
+        if (!m_detectionStarted)
         {
-            m_lastPollMs = millis();
-            pollForCard(readTimeoutMs);
+            startDetection();
+            return;
         }
+
+        m_irqCurr = digitalRead(m_config.irqPin);
+        if (m_irqCurr == LOW && m_irqPrev == HIGH)
+        {
+            LOG_DEBUG(m_name, "Got NFC IRQ (pin went LOW)");
+            handleCardDetected();
+        }
+        m_irqPrev = m_irqCurr;
+        return;
+    }
+
+    const auto pollIntervalMs = lowPowerPollingMode ? getSleepPollIntervalMs() : getActivePollingIntervalMs();
+    const auto readTimeoutMs = lowPowerPollingMode ? getSleepReadTimeoutMs() : getActivePollingTimeoutMs();
+    if (millis() - m_lastPollMs >= pollIntervalMs)
+    {
+        m_lastPollMs = millis();
+        pollForCard(readTimeoutMs);
     }
 }
 
@@ -246,72 +300,35 @@ void Pn532Service::end()
 
 void Pn532Service::startDetection()
 {
-    // Only used in IRQ mode - starts async detection, PN532 signals via IRQ when card found
     const auto now = millis();
     if (m_lastDetectionFailureMs != 0 && (now - m_lastDetectionFailureMs) < m_config.recoveryDelayMs)
     {
         return;
     }
 
-    // Reset IRQ state tracking for edge detection
     m_irqPrev = m_irqCurr = HIGH;
     m_irqTriggered.store(false, std::memory_order_relaxed);
 
-    // Use the library's startPassiveTargetIDDetection() which is designed for IRQ mode
-    // This sends InListPassiveTarget command and waits for ACK only (not the response)
-    // The PN532 will pull IRQ LOW when a card is detected
-    //
-    // IMPORTANT: This function returns true if a card is ALREADY present (IRQ already LOW),
-    // in which case we should read it immediately without waiting for IRQ interrupt
     const bool cardAlreadyPresent = m_pn532->startPassiveTargetIDDetection(PN532_MIFARE_ISO14443A);
-
     if (cardAlreadyPresent)
     {
-        // Card was already in the field - read it immediately
         LOG_DEBUG(m_name, "Card already present during detection start");
         m_detectionStarted = true;
         handleCardDetected();
         return;
     }
 
-    // Check if detection command was sent successfully by verifying IRQ is HIGH
-    // (PN532 pulls IRQ LOW when it has response data ready, HIGH means waiting for card)
     m_irqCurr = digitalRead(m_config.irqPin);
     if (m_irqCurr == HIGH)
     {
-        // Command sent successfully, now waiting for card
         m_detectionStarted = true;
         m_lastDetectionFailureMs = 0;
         m_consecutiveErrors = 0;
         return;
     }
 
-    // IRQ is LOW but startPassiveTargetIDDetection returned false - something is wrong
-    ++m_metrics.readErrors;
-    ++m_consecutiveErrors;
-    m_lastDetectionFailureMs = now;
     m_detectionStarted = false;
-
-    LOG_WARN(m_name, "Failed to start card detection (retry in %lums, errors=%u)",
-             m_config.recoveryDelayMs,
-             m_consecutiveErrors);
-
-    if (m_consecutiveErrors >= m_config.maxConsecutiveErrors)
-    {
-        ++m_metrics.recoveryAttempts;
-        m_consecutiveErrors = 0;
-        if (m_useIrqMode && recoverIrqMode())
-        {
-            LOG_WARN(m_name, "PN532 recovered - retrying IRQ detection");
-            return;
-        }
-        if (m_useIrqMode)
-        {
-            m_useIrqMode = false;
-            m_detectionStarted = false;
-            LOG_WARN(m_name, "IRQ detection failing - falling back to polling (%lums)", m_pollIntervalMs);
-        }
-    }
+    noteActiveIrqFailure(now, "IRQ stayed LOW after startPassiveTargetIDDetection");
 }
 
 void Pn532Service::pollForCard(const std::uint32_t timeoutMs)
@@ -334,10 +351,90 @@ void Pn532Service::handleCardDetected()
     }
     else
     {
-        ++m_metrics.readErrors;
-        ++m_consecutiveErrors;
+        noteActiveIrqFailure(millis(), "readDetectedPassiveTargetID failed");
     }
-    m_detectionStarted = false;  // Restart detection for next card
+    m_detectionStarted = false;
+}
+
+void Pn532Service::noteActiveIrqFailure(const std::uint32_t nowMs, const char *reason)
+{
+    ++m_metrics.readErrors;
+    ++m_metrics.activeIrqFailures;
+    ++m_consecutiveErrors;
+    m_lastDetectionFailureMs = nowMs;
+
+    LOG_WARN(m_name, "Active IRQ detection failure: %s (errors=%u)", reason, m_consecutiveErrors);
+
+    if (m_consecutiveErrors < m_config.maxConsecutiveErrors)
+    {
+        return;
+    }
+
+    m_consecutiveErrors = 0;
+    activateActivePollingFallback(nowMs, reason);
+}
+
+void Pn532Service::activateActivePollingFallback(const std::uint32_t nowMs, const char *reason)
+{
+    m_activeIrqEnabled = false;
+    m_detectionStarted = false;
+    m_lastDetectionFailureMs = nowMs;
+    m_activeIrqRetryAtMs = nowMs + m_config.recoveryDelayMs;
+
+    if (!m_activePollingFallback)
+    {
+        m_activePollingFallback = true;
+        ++m_metrics.activePollFallbackEntries;
+        LOG_WARN(m_name, "Active scan mode -> poll-fallback (%s)", reason);
+        return;
+    }
+
+    LOG_WARN(m_name, "Active poll-fallback remains active (%s)", reason);
+}
+
+void Pn532Service::maybeRecoverActiveIrq(const std::uint32_t nowMs)
+{
+    if (!m_activeIrqConfigured || !m_activePollingFallback || nowMs < m_activeIrqRetryAtMs)
+    {
+        return;
+    }
+
+    if (recoverIrqMode())
+    {
+        m_activeIrqEnabled = true;
+        m_activePollingFallback = false;
+        m_activeIrqRetryAtMs = 0;
+        LOG_INFO(m_name, "Active scan mode -> recovered-to-irq");
+        return;
+    }
+
+    m_activeIrqRetryAtMs = nowMs + m_config.recoveryDelayMs;
+    LOG_WARN(m_name, "Active IRQ recovery failed; staying in poll-fallback");
+}
+
+bool Pn532Service::isUsingActiveIrqPrimary() const
+{
+    return m_activeIrqEnabled && !m_activePollingFallback && !m_isAsleep;
+}
+
+std::uint32_t Pn532Service::getActivePollingIntervalMs() const
+{
+    if (m_activePollingFallback)
+    {
+        return kActivePollingFallbackIntervalMs;
+    }
+
+    return m_pollIntervalMs;
+}
+
+std::uint32_t Pn532Service::getActivePollingTimeoutMs() const
+{
+    if (m_activePollingFallback)
+    {
+        return kActivePollingFallbackTimeoutMs;
+    }
+
+    return m_config.readTimeoutMs;
 }
 
 void Pn532Service::handleWakeRead()
@@ -350,9 +447,6 @@ void Pn532Service::handleWakeRead()
         return;
     }
 
-    // After PowerDown RF wakeup, PN532 is freshly re-initialized (SAMConfig called in wakeup()).
-    // There is no pending InListPassiveTarget response, so readDetectedPassiveTargetID() would fail.
-    // Do a fresh poll instead — the card is still in field since it triggered the wakeup.
     std::uint8_t uid[7]{};
     std::uint8_t uidLength{};
     if (m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, m_config.readTimeoutMs))
@@ -370,19 +464,18 @@ void Pn532Service::handleWakeRead()
     m_detectionStarted = false;
 }
 
-
 std::uint32_t Pn532Service::getSleepPollIntervalMs() const
 {
     switch (m_powerState)
     {
         case PowerState::Active:
-            return 150; // Idle but awake: keep taps feeling immediate.
+            return 150;
         case PowerState::LightSleep:
-            return 300; // WiFi power-save: slower polling, still sub-second tap response.
+            return 300;
         case PowerState::ModemSleep:
-            return 750; // WiFi off: save battery, keep first tap comfortably under 1s.
+            return 750;
         default:
-            return m_pollIntervalMs; // Active state fallback (polling mode only)
+            return m_pollIntervalMs;
     }
 }
 
@@ -416,16 +509,10 @@ void Pn532Service::pollWhileAsleep()
     }
 
     static constexpr std::uint32_t kSleepScanWindowMs{800};
-    bool cardFound = false;
     std::uint8_t uid[7]{};
     std::uint8_t uidLength{};
 
-    // Use blocking readPassiveTargetID for both modes. startPassiveTargetIDDetection() leaves
-    // an InListPassiveTarget command pending if no card is found within the window, which causes
-    // the subsequent enterSleep() PowerDown command to fail (no ACK from busy PN532).
-    cardFound = m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, kSleepScanWindowMs);
-
-    if (cardFound)
+    if (m_pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, kSleepScanWindowMs))
     {
         ++m_metrics.sleepWakeReads;
         publishCardEvent(uid, uidLength);
@@ -447,6 +534,7 @@ void Pn532Service::publishCardEvent(const std::uint8_t *uid, const std::uint8_t 
     ++m_metrics.cardsRead;
     ++m_metrics.successfulReads;
     m_consecutiveErrors = 0;
+    m_lastDetectionFailureMs = 0;
     m_lastCardUidLength = uidLength;
     m_lastCardReadMs = millis();
 
@@ -467,17 +555,21 @@ bool Pn532Service::enterSleep()
 
     if (m_isAsleep)
     {
-        return true;  // Already asleep
+        return true;
     }
 
     LOG_INFO(m_name, "Putting PN532 into sleep mode");
 
-    // TODO: Ensure any ongoing operations are complete before sleep (callers must ensure this), also check all this impl is correct
-    // PN532 PowerDown command (0x16)
-    // Reference: https://forums.adafruit.com/viewtopic.php?t=70344
-    //
-    // PowerDown uses a WakeUpEnable bitmask plus an optional GenerateIRQ parameter.
-    // For SPI boards the SPI wake source is bit 2 (0x04), not bit 5.
+    if (m_detectionStarted && m_activeIrqConfigured && !m_activePollingFallback)
+    {
+        LOG_DEBUG(m_name, "Resetting active IRQ detection before PowerDown");
+        if (!reinitializePn532())
+        {
+            LOG_ERROR(m_name, "Failed to reset PN532 before sleep");
+            return false;
+        }
+    }
+
     std::uint8_t wakeupSources{kPn532WakeupSourceSpi};
     std::uint8_t cmd[3]{0x16, wakeupSources, 0x00};
     std::uint8_t cmdLength{2};
@@ -496,15 +588,12 @@ bool Pn532Service::enterSleep()
 
     cmd[1] = wakeupSources;
 
-    // Send PowerDown command and check for ACK
     if (!m_pn532->sendCommandCheckAck(cmd, cmdLength, 100))
     {
         LOG_ERROR(m_name, "Failed to send PowerDown command - no ACK received");
         return false;
     }
 
-    // PowerDown still emits a normal response frame after the ACK. If we leave that
-    // unread, IRQ can stay asserted and the next wake/detect cycle becomes unreliable.
     std::uint8_t powerDownStatus{kPn532PowerDownStatusOk};
     if (!readPowerDownResponse(*m_pn532, powerDownStatus))
     {
@@ -517,7 +606,6 @@ bool Pn532Service::enterSleep()
         return false;
     }
 
-    // The PN532 needs about 1ms after the response before it is reliably in PowerDown.
     delay(1);
 
     m_isAsleep = true;
@@ -530,7 +618,7 @@ bool Pn532Service::enterSleep()
     {
         ++m_metrics.earlySleepEntries;
     }
-    if (m_useIrqMode)
+    if (m_activeIrqConfigured || m_sleepIrqWakeEnabled)
     {
         m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
     }
@@ -548,25 +636,13 @@ bool Pn532Service::wakeup()
 
     if (!m_isAsleep)
     {
-        return true; // Already awake
+        return true;
     }
 
     LOG_INFO(m_name, "Waking PN532 from PowerDown mode");
-
-    // Wakeup sequence for SPI mode (per Adafruit library and PN532 datasheet):
-    // Reference: https://forums.adafruit.com/viewtopic.php?t=70344
-    // Reference: https://github.com/adafruit/Adafruit-PN532/blob/master/Adafruit_PN532.cpp#L197
-    //
-    // The PN532 wakes from PowerDown when NSS/CS is held LOW
-    // We must use the library's wakeup() method which:
-    // 1. Holds CS LOW for 2ms (triggers wakeup)
-    // 2. Calls SAMConfig() to restore normal mode
     m_pn532->wakeup();
 
-    // SAMConfig (called inside wakeup) pulls IRQ LOW during its response, then releases.
-    // Wait for IRQ HIGH before proceeding — otherwise the SPI bus is dirty and the first
-    // readPassiveTargetID command gets corrupted.
-    if (m_useIrqMode)
+    if (m_activeIrqConfigured || m_sleepIrqWakeEnabled)
     {
         if (!waitForIrqHigh(100))
         {
@@ -583,7 +659,7 @@ bool Pn532Service::wakeup()
     m_detectionStarted = false;
     m_powerMode = Pn532PowerMode::ActiveScan;
     m_wakeRetryAtMs = 0;
-    if (m_useIrqMode)
+    if (m_activeIrqConfigured || m_sleepIrqWakeEnabled)
     {
         pinMode(m_config.irqPin, INPUT_PULLUP);
         m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
@@ -603,39 +679,11 @@ bool Pn532Service::enableIrqWakeup()
     pinMode(m_config.irqPin, INPUT_PULLUP);
     LOG_INFO(m_name, "Enabling PN532 IRQ wakeup on card detection");
 
-    // TODO: need check this impl is correct
-    // Reference: https://community.home-assistant.io/t/wake-esp8266-from-deep-sleep-on-tag-read-by-pn532/187760
-    //
-    // Key points for IRQ-based wakeup:
-    // 1. SAMConfig must enable IRQ (3rd parameter = 0x01) - already done in begin()
-    // 2. PowerDown command needs bits 0 and 3 set for RF detection IRQ
-    // 3. IRQ pin must be configured before deep sleep
-    // 4. ESP32: Use esp_sleep_enable_ext0_wakeup() to wake on IRQ LOW
-    //    ESP8266: Connect IRQ to RST pin - IRQ LOW triggers hardware reset
-
-    // Configure ESP32/ESP8266 side IRQ pin
-    // IMPORTANT: Must be configured as INPUT with pull-up
-    // The PN532 will pull this LOW when a card is detected during PowerDown
-    pinMode(m_config.irqPin, INPUT_PULLUP);
-
-    LOG_DEBUG(m_name, "ESP32 GPIO%d configured for IRQ (INPUT_PULLUP)", m_config.irqPin);
-
-    // The PN532 IRQ functionality is configured via SAMConfig
-    // which is already called in begin() with IRQ enabled (param 3 = 0x01)
-    // We just need to ensure SAM is properly configured
     if (!m_pn532->SAMConfig())
     {
         LOG_ERROR(m_name, "Failed to reconfigure SAM for IRQ");
         return false;
     }
-
-    LOG_DEBUG(m_name, "SAM reconfigured with IRQ support");
-
-    // NOTE: We intentionally do NOT call setPassiveActivationRetries() here.
-    // The Adafruit library has a bug where it doesn't read the response frame,
-    // leaving the IRQ pin stuck LOW. For IRQ wakeup from deep sleep, the default
-    // retry settings work fine since the PN532 will continuously scan for cards
-    // in PowerDown mode with RF wakeup enabled.
 
     m_irqWakeupEnabled = true;
 
@@ -695,17 +743,34 @@ bool Pn532Service::reinitializePn532()
         return false;
     }
 
-    // NOTE: We intentionally skip setPassiveActivationRetries() here.
-    // The Adafruit library doesn't read the response frame, leaving IRQ stuck LOW.
-    // Default retry settings work fine for both polling and IRQ modes.
-    
-    if (m_useIrqMode)
+    if (m_activeIrqConfigured || m_sleepIrqWakeEnabled)
+    {
+        pinMode(m_config.irqPin, INPUT_PULLUP);
+    }
+
+    if (m_activeIrqConfigured && !waitForIrqHigh(100))
+    {
+        LOG_WARN(m_name, "IRQ did not return HIGH after PN532 reinit");
+        return false;
+    }
+
+    if (m_sleepIrqWakeEnabled)
     {
         m_irqWakeupEnabled = enableIrqWakeup();
+        if (!m_irqWakeupEnabled)
+        {
+            LOG_WARN(m_name, "PN532 sleep IRQ wake re-enable failed after reinit");
+            m_sleepIrqWakeEnabled = false;
+        }
+        else if (!waitForIrqHigh(100))
+        {
+            LOG_WARN(m_name, "IRQ did not return HIGH after sleep wake re-enable");
+        }
     }
 
     m_isAsleep = false;
     m_pn532State = Pn532State::Ready;
+    m_detectionStarted = false;
     m_powerMode = Pn532PowerMode::ActiveScan;
     m_wakeRetryAtMs = 0;
     return true;
@@ -719,7 +784,8 @@ bool Pn532Service::recoverIrqMode()
         LOG_ERROR(m_name, "PN532 recovery failed");
         return false;
     }
-    // Reset IRQ state tracking
+
+    m_activeIrqEnabled = true;
     m_irqPrev = m_irqCurr = digitalRead(m_config.irqPin);
     m_lastDetectionFailureMs = 0;
     m_detectionStarted = false;
@@ -728,9 +794,6 @@ bool Pn532Service::recoverIrqMode()
 
 bool Pn532Service::waitForIrqHigh(const std::uint32_t timeoutMs)
 {
-    // Wait for IRQ pin to go HIGH (idle state)
-    // The PN532 pulls IRQ LOW when it has data ready or during certain operations
-    // We must wait for it to release before starting new operations
     const auto start = millis();
     while (digitalRead(m_config.irqPin) == LOW)
     {
@@ -746,7 +809,6 @@ bool Pn532Service::waitForIrqHigh(const std::uint32_t timeoutMs)
 bool Pn532Service::attachIrqInterrupt()
 {
     pinMode(m_config.irqPin, INPUT_PULLUP);
-    // Use waitForIrqHigh instead of single check to handle transient LOW states
     if (!waitForIrqHigh(50))
     {
         LOG_WARN(m_name, "IRQ pin GPIO%d is stuck LOW at attach; check wiring or pull-up", m_config.irqPin);
@@ -779,11 +841,19 @@ void Pn532Service::handlePowerStateChange(const PowerEvent &power)
     switch (m_targetPowerMode)
     {
         case Pn532PowerMode::PowerDown:
-            if (!m_useIrqMode)
+            if (!m_sleepIrqWakeEnabled)
             {
                 m_isAsleep = false;
-                m_powerMode = Pn532PowerMode::PowerDown;
-                LOG_INFO(m_name, "Polling low-power mode active (PN532 stays awake, slower scan cadence)");
+                if (isUsingActiveIrqPrimary())
+                {
+                    m_powerMode = Pn532PowerMode::ActiveScan;
+                    LOG_INFO(m_name, "Sleep IRQ unavailable; keeping PN532 awake in active IRQ mode");
+                }
+                else
+                {
+                    m_powerMode = Pn532PowerMode::PowerDown;
+                    LOG_INFO(m_name, "Polling low-power mode active (PN532 stays awake, slower scan cadence)");
+                }
                 break;
             }
 

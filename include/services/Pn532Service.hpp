@@ -68,6 +68,8 @@ public:
         obj["reads_successful"] = m_metrics.successfulReads;
         obj["reads_failed"] = m_metrics.readErrors;
         obj["recoveries"] = m_metrics.recoveryAttempts;
+        obj["active_irq_failures"] = m_metrics.activeIrqFailures;
+        obj["active_poll_fallback_entries"] = m_metrics.activePollFallbackEntries;
         obj["sleep_entries"] = m_metrics.sleepEntries;
         obj["early_sleep_entries"] = m_metrics.earlySleepEntries;
         obj["irq_wakeups"] = m_metrics.irqWakeups;
@@ -83,6 +85,12 @@ private:
     void handleWakeRead();
     void pollForCard(std::uint32_t timeoutMs);
     void pollWhileAsleep();
+    void noteActiveIrqFailure(std::uint32_t nowMs, const char *reason);
+    void activateActivePollingFallback(std::uint32_t nowMs, const char *reason);
+    void maybeRecoverActiveIrq(std::uint32_t nowMs);
+    [[nodiscard]] bool isUsingActiveIrqPrimary() const;
+    [[nodiscard]] std::uint32_t getActivePollingIntervalMs() const;
+    [[nodiscard]] std::uint32_t getActivePollingTimeoutMs() const;
     void publishCardEvent(const std::uint8_t *uid, std::uint8_t uidLength);
     void handlePowerStateChange(const PowerEvent &power);
     [[nodiscard]] bool shouldSleepBetweenScans() const;
@@ -116,12 +124,16 @@ private:
 
     std::atomic_bool m_irqTriggered{false};
     bool m_isAsleep{false};
+    bool m_activeIrqConfigured{false};
+    bool m_activeIrqEnabled{false};
+    bool m_activePollingFallback{false};
     bool m_irqWakeupEnabled{false};
+    bool m_sleepIrqWakeEnabled{false};
     bool m_detectionStarted{false};
-    bool m_useIrqMode{false};
     PowerState m_powerState{PowerState::Active};
     Pn532PowerMode m_targetPowerMode{Pn532PowerMode::ActiveScan};
     Pn532PowerMode m_powerMode{Pn532PowerMode::ActiveScan};
+    std::uint32_t m_activeIrqRetryAtMs{0};
     std::uint32_t m_lastDetectionFailureMs{0};
     std::uint32_t m_pollIntervalMs{0};
     std::uint32_t m_wakeRetryAtMs{0};
