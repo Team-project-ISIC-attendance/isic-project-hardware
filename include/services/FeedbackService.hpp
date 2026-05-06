@@ -66,6 +66,7 @@ private:
 
     void setLed(LedColor color);
     void setBuzzer(bool on, std::uint16_t frequencyHz = 0);
+    [[nodiscard]] bool hasLedConfigured() const noexcept;
     [[nodiscard]] bool isRgb() const noexcept;
 
     EventBus &m_bus;

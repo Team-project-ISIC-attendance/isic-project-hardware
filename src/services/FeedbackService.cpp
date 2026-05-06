@@ -12,8 +12,7 @@ namespace isic
  *
  * Event              Color    Beep   Meaning
  * ─────────────────────────────────────────────
- * Card detected      Cyan     —      NFC tag in range
- * Attendance OK      Green    2×     Scan recorded
+ * Attendance OK      —        1×     Scan recorded
  * Error              Red      3×     Read/record failed
  * Processing         Blue     —      Waiting on network
  * Connected          Green    —      WiFi + MQTT up
@@ -23,15 +22,8 @@ namespace isic
  */
 namespace
 {
-// Card detected — cyan flash: "I see your card"
-constexpr FeedbackPattern PATTERN_CARD_SCANNED{
-        .ledOnMs = 150, .ledOffMs = 0, .beepMs = 0, .beepFrequencyHz = 0,
-        .repeatCount = 1, .color = LedColor::Cyan};
-
-// Attendance recorded — green double blink + 2 beeps
-constexpr FeedbackPattern PATTERN_SUCCESS{
-        .ledOnMs = 200, .ledOffMs = 100, .beepMs = 80, .beepFrequencyHz = 2800,
-        .repeatCount = 2, .color = LedColor::Green};
+constexpr std::uint16_t kAttendanceSuccessBeepMs{80};
+constexpr std::uint16_t kAttendanceSuccessBeepFrequencyHz{2800};
 
 // Read/record error — red triple blink + 3 low beeps
 constexpr FeedbackPattern PATTERN_ERROR{
@@ -76,19 +68,10 @@ FeedbackService::FeedbackService(EventBus &bus, FeedbackConfig &config)
         digitalWrite(m_config.buzzerPin, LOW);
     }
 
-    m_eventConnections.reserve(4);
+    m_eventConnections.reserve(1);
 
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::CardScanned, [this](const Event &) {
-        queuePattern(PATTERN_CARD_SCANNED);
-    }));
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::AttendanceRecorded, [this](const Event &) {
         signalSuccess();
-    }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::OtaStarted, [this](const Event &) {
-        signalOtaStart();
-    }));
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::OtaCompleted, [this](const Event &) {
-        signalOtaComplete();
     }));
 }
 
@@ -106,7 +89,7 @@ Status FeedbackService::begin()
     }
 
     // Configure LED pin(s)
-    if (m_config.ledEnabled)
+    if (hasLedConfigured())
     {
         if (isRgb())
         {
@@ -122,10 +105,6 @@ Status FeedbackService::begin()
             pinMode(m_config.ledPin, OUTPUT);
             setLed(LedColor::Off);
             LOG_INFO(m_name, "Single LED ready GPIO%u activeHigh=%d", m_config.ledPin, m_config.ledActiveHigh);
-        }
-        else
-        {
-            LOG_WARN(m_name, "LED enabled but no pin configured");
         }
     }
 
@@ -207,8 +186,14 @@ void FeedbackService::end()
 
 void FeedbackService::signalSuccess()
 {
-    LOG_INFO(m_name, "Signal: success (green x2)");
-    queuePattern(PATTERN_SUCCESS);
+    LOG_INFO(m_name, "Signal: attendance recorded (single beep)");
+    stopCurrent();
+    clearQueue();
+
+    if (m_enabled && m_config.buzzerEnabled && m_config.buzzerPin != 0xFF)
+    {
+        tone(m_config.buzzerPin, kAttendanceSuccessBeepFrequencyHz, kAttendanceSuccessBeepMs);
+    }
 }
 
 void FeedbackService::signalError()
@@ -266,7 +251,7 @@ void FeedbackService::beepOnce(const std::uint16_t durationMs)
 
 void FeedbackService::ledOnce(const std::uint16_t durationMs)
 {
-    if (!m_enabled)
+    if (!m_enabled || !hasLedConfigured())
     {
         return;
     }
@@ -326,6 +311,11 @@ void FeedbackService::stopCurrent() noexcept
     setBuzzer(false);
 }
 
+bool FeedbackService::hasLedConfigured() const noexcept
+{
+    return m_config.ledEnabled && (isRgb() || m_config.ledPin != 0xFF);
+}
+
 bool FeedbackService::isRgb() const noexcept
 {
     return m_config.ledRedPin != 0xFF && m_config.ledGreenPin != 0xFF && m_config.ledBluePin != 0xFF;
@@ -333,7 +323,7 @@ bool FeedbackService::isRgb() const noexcept
 
 void FeedbackService::setLed(const LedColor color)
 {
-    if (!m_config.ledEnabled || color == m_ledCurrentColor)
+    if (!hasLedConfigured() || color == m_ledCurrentColor)
     {
         return;
     }
