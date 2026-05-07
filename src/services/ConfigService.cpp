@@ -604,11 +604,6 @@ Status ConfigService::begin()
     setState(ServiceState::Running);
     LOG_INFO(m_name, "Ready, device=%s, fw=%s", m_config.device.deviceId.c_str(), DeviceConfig::Constants::kFirmwareVersion);
 
-    m_config.wifi.stationSsid = "UPC1548499";
-    m_config.wifi.stationPassword = "5bpffkLDjzt8";
-    m_config.mqtt.brokerAddress = "192.168.0.40";
-
-
     return Status::Ok();
 }
 

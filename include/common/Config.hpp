@@ -242,14 +242,15 @@ struct FeedbackConfig
     };
 
     static constexpr auto kDefaultEnabled{true};
-    static constexpr auto kDefaultLedEnabled{false};
 #ifdef ISIC_PLATFORM_ESP8266
-    static constexpr auto kDefaultLedPin{0xFF};
+    static constexpr auto kDefaultLedEnabled{true};
+    static constexpr auto kDefaultLedPin{2}; // D4 / built-in ESP-12F LED
     static constexpr auto kDefaultLedRedPin{0xFF};
     static constexpr auto kDefaultLedGreenPin{0xFF};
     static constexpr auto kDefaultLedBluePin{0xFF};
-    static constexpr auto kDefaultBuzzerPin{0xFF};
+    static constexpr auto kDefaultBuzzerPin{16}; // D0
 #elif defined(ISIC_PLATFORM_ESP32)
+    static constexpr auto kDefaultLedEnabled{false};
     static constexpr auto kDefaultLedPin{0xFF};
     static constexpr auto kDefaultLedRedPin{25};
     static constexpr auto kDefaultLedGreenPin{26};
@@ -259,7 +260,11 @@ struct FeedbackConfig
 #error "Unsupported platform"
 #endif
     static constexpr auto kDefaultBuzzerEnabled{true};
+#ifdef ISIC_PLATFORM_ESP8266
+    static constexpr auto kDefaultLedActiveHigh{false}; // built-in ESP-12F LED is active low
+#else
     static constexpr auto kDefaultLedActiveHigh{true}; // common cathode = active high
+#endif
     static constexpr auto kDefaultBeepFrequencyHz{2'000};
     static constexpr auto kDefaultSuccessBlinkDurationMs{100};
     static constexpr auto kDefaultErrorBlinkDurationMs{200};
@@ -387,7 +392,7 @@ struct PowerConfig
     static constexpr auto kDefaultBurstHoldMs{45'000};        // 45 seconds
     static constexpr auto kDefaultEnableNfcWakeup{true};
     static constexpr auto kDefaultNfcWakeupPin{Pn532Config::kDefaultIrqPin};
-    static constexpr auto kDefaultAutoSleepEnabled{false};
+    static constexpr auto kDefaultAutoSleepEnabled{true};
     static constexpr auto kDefaultDisableWiFiDuringSleep{true};
     static constexpr auto kDefaultPn532SleepBetweenScans{true};
     static constexpr auto kDefaultModemSleepOnMqttDisconnect{true};
