@@ -30,7 +30,7 @@ constexpr char CONFIG_HTML[] PROGMEM =
 "<input name=ssid placeholder=SSID required>"
 EDUROAM_USERNAME_FIELD
 "<input type=password name=password placeholder=Password>"
-"<details><summary>MQTT (optional)</summary>"
+"<details><summary>MQTT</summary>"
 "<input name=mqtt_broker placeholder=Broker>"
 "<input name=mqtt_port value=1883 placeholder=Port>"
 "<input name=mqtt_username placeholder=User>"
