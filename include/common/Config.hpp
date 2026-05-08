@@ -12,7 +12,11 @@ struct WiFiConfig
         static constexpr auto kSystemRebootDelayMs{5'000};
     };
     static constexpr auto kStationConnectRetryDelayMs{500}; // 500 milliseconds
+#ifdef ISIC_WIFI_EDUROAM
+    static constexpr auto kStationConnectionTimeoutMs{25'000}; // 25s — WPA2-Enterprise EAP + RADIUS round-trip
+#else
     static constexpr auto kStationConnectionTimeoutMs{10'000}; // 10 seconds
+#endif
     static constexpr auto kStationMaxFastConnectionAttempts{10};
     static constexpr auto kStationFastReconnectIntervalMs{5'000}; // 5 seconds
     static constexpr auto kStationSlowReconnectIntervalMs{600'000}; // 10 minutes
@@ -40,7 +44,13 @@ struct WiFiConfig
 
     [[nodiscard]] bool isConfigured() const
     {
-        return !stationSsid.empty() && !stationPassword.empty();
+        if (stationSsid.empty() || stationPassword.empty())
+            return false;
+#ifdef ISIC_WIFI_EDUROAM
+        return !stationUsername.empty();
+#else
+        return true;
+#endif
     }
 
     void restoreDefaults()

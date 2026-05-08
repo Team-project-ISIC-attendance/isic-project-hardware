@@ -53,7 +53,6 @@ enum class WiFiState : std::uint8_t
     Connecting,
     Connected,
     ApMode,
-    WaitingRetry,
     Error,
 };
 

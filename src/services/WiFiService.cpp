@@ -117,14 +117,6 @@ void WiFiService::loop()
             handleDisconnected();
             break;
         }
-        case WiFiState::WaitingRetry: {
-            // Non-blocking retry delay
-            if (!m_powerSleepActive && millis() - m_lastDisconnectMs >= 100)
-            {
-                connectToStation();
-            }
-            break;
-        }
         default: {
             break;
         }
@@ -246,11 +238,7 @@ void WiFiService::connectToStation()
     }
 
     WiFi.mode(WIFI_STA);
-    platform::setWiFiNormalPower();
-    if (m_config.stationPowerSaveEnabled)
-    {
-        platform::setWiFiLightSleep();
-    }
+    platform::setWiFiNormalPower(); // keep full power during authentication
 
 #ifdef ISIC_WIFI_EDUROAM
     platform::connectEduroam(m_config.stationSsid.c_str(), m_config.stationUsername.c_str(), m_config.stationPassword.c_str());
@@ -370,6 +358,11 @@ void WiFiService::onConnected()
         configTime(0, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
         m_timeSyncStarted = true;
         LOG_INFO(m_name, "NTP sync requested");
+    }
+
+    if (m_config.stationPowerSaveEnabled)
+    {
+        platform::setWiFiLightSleep();
     }
 
     // Service is now fully operational - transition to Running

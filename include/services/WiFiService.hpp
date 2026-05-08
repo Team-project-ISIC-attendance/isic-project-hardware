@@ -89,7 +89,6 @@ private:
 
     std::uint32_t m_lastReconnectAttemptMs{0};
     std::uint32_t m_connectAttempts{0};
-    std::uint32_t m_lastDisconnectMs{0};
     std::uint32_t m_apStartMs{0};
     std::uint8_t m_connectRetries{0};
     bool m_inSlowRetryMode{false};
