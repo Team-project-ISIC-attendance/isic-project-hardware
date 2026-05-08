@@ -7,7 +7,6 @@
 #include "core/IService.hpp"
 
 #include <Adafruit_PN532.h>
-#include <atomic>
 #include <vector>
 #include <memory>
 
@@ -101,11 +100,6 @@ private:
     bool reinitializePn532();
     bool recoverIrqMode();
     bool waitForIrqHigh(std::uint32_t timeoutMs);
-    bool attachIrqInterrupt();
-    void detachIrqInterrupt();
-
-    static void IRAM_ATTR isrTrampoline();
-    inline static Pn532Service* s_activeInstance{nullptr};
 
     EventBus &m_bus;
     ConfigService &m_configService;
@@ -122,7 +116,6 @@ private:
     std::uint32_t m_lastPollMs{0};
     std::vector<EventBus::ScopedConnection> m_eventConnections{};
 
-    std::atomic_bool m_irqTriggered{false};
     bool m_isAsleep{false};
     bool m_activeIrqConfigured{false};
     bool m_activeIrqEnabled{false};

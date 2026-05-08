@@ -1,9 +1,5 @@
-#define private public
 #include <Adafruit_PN532.h>
-#undef private
-
 #include "services/Pn532Service.hpp"
-
 #include "common/Logger.hpp"
 
 #include <algorithm>
@@ -12,40 +8,13 @@ namespace isic
 {
 namespace
 {
-constexpr std::uint8_t kPn532PowerDownResponseLength{9};
-constexpr std::uint8_t kPn532PowerDownResponseCode{0x17};
-constexpr std::uint8_t kPn532PowerDownStatusOk{0x00};
-
 constexpr std::uint8_t kPn532WakeupSourceRfLevel{0x01};
-constexpr std::uint8_t kPn532WakeupSourceHsu{0x02};
 constexpr std::uint8_t kPn532WakeupSourceSpi{0x04};
 constexpr std::uint8_t kPn532GenerateIrqOnWake{0x01};
 
 constexpr std::uint32_t kActivePollingFallbackIntervalMs{75};
 constexpr std::uint32_t kActivePollingFallbackTimeoutMs{30};
-
-bool readPowerDownResponse(Adafruit_PN532 &pn532, std::uint8_t &status)
-{
-    std::uint8_t response[kPn532PowerDownResponseLength]{};
-    pn532.readdata(response, sizeof(response));
-
-    if (response[6] != kPn532PowerDownResponseCode)
-    {
-        return false;
-    }
-
-    status = response[7];
-    return true;
-}
 } // namespace
-
-void IRAM_ATTR Pn532Service::isrTrampoline()
-{
-    if (s_activeInstance)
-    {
-        s_activeInstance->m_irqTriggered.store(true, std::memory_order_relaxed);
-    }
-}
 
 Pn532Service::Pn532Service(EventBus &bus, ConfigService &configService)
     : ServiceBase("Pn532Service")
@@ -72,7 +41,13 @@ Status Pn532Service::begin()
         m_pn532 = std::make_unique<Adafruit_PN532>(m_config.spiSckPin, m_config.spiMisoPin, m_config.spiMosiPin, m_config.spiCsPin);
     }
 
-    m_pn532->begin();
+    if (!m_pn532->begin())
+    {
+        LOG_ERROR(m_name, "PN532 begin() failed");
+        m_pn532State = Pn532State::Error;
+        setState(ServiceState::Error);
+        return Status::Error("PN532 begin() failed");
+    }
 
     const auto version{m_pn532->getFirmwareVersion()};
     if (!version)
@@ -307,7 +282,6 @@ void Pn532Service::startDetection()
     }
 
     m_irqPrev = m_irqCurr = HIGH;
-    m_irqTriggered.store(false, std::memory_order_relaxed);
 
     const bool cardAlreadyPresent = m_pn532->startPassiveTargetIDDetection(PN532_MIFARE_ISO14443A);
     if (cardAlreadyPresent)
@@ -522,7 +496,10 @@ void Pn532Service::pollWhileAsleep()
     if (shouldSleepBetweenScans())
     {
         waitForIrqHigh(50);
-        enterSleep();
+        if (!enterSleep())
+        {
+            enterRecovering(millis());
+        }
     }
 }
 
@@ -539,7 +516,6 @@ void Pn532Service::publishCardEvent(const std::uint8_t *uid, const std::uint8_t 
     m_lastCardReadMs = millis();
 
     LOG_DEBUG(m_name, "Card: %s", cardUidToString(m_lastCardUid, uidLength).c_str());
-    m_targetPowerMode = Pn532PowerMode::ActiveScan;
     m_powerMode = Pn532PowerMode::ActiveScan;
     m_wakeRetryAtMs = 0;
     m_bus.publish({EventType::CardScanned, CardEvent{.timestampMs = m_lastCardReadMs, .uid = m_lastCardUid}});
@@ -594,19 +570,10 @@ bool Pn532Service::enterSleep()
         return false;
     }
 
-    std::uint8_t powerDownStatus{kPn532PowerDownStatusOk};
-    if (!readPowerDownResponse(*m_pn532, powerDownStatus))
-    {
-        LOG_ERROR(m_name, "Invalid PowerDown response frame");
-        return false;
-    }
-    if (powerDownStatus != kPn532PowerDownStatusOk)
-    {
-        LOG_ERROR(m_name, "PN532 rejected PowerDown command (status=0x%02X)", powerDownStatus);
-        return false;
-    }
-
-    delay(1);
+    // The PowerDown response frame is intentionally not read here.
+    // The PN532 enters PowerDown after ACK; on wakeup the SPI state machine resets,
+    // so the unread response bytes do not corrupt subsequent transactions.
+    delay(5);
 
     m_isAsleep = true;
     m_detectionStarted = false;
@@ -804,32 +771,6 @@ bool Pn532Service::waitForIrqHigh(const std::uint32_t timeoutMs)
         delay(1);
     }
     return true;
-}
-
-bool Pn532Service::attachIrqInterrupt()
-{
-    pinMode(m_config.irqPin, INPUT_PULLUP);
-    if (!waitForIrqHigh(50))
-    {
-        LOG_WARN(m_name, "IRQ pin GPIO%d is stuck LOW at attach; check wiring or pull-up", m_config.irqPin);
-        s_activeInstance = nullptr;
-        m_irqTriggered.store(false, std::memory_order_relaxed);
-        return false;
-    }
-
-    s_activeInstance = this;
-    attachInterrupt(digitalPinToInterrupt(m_config.irqPin), isrTrampoline, FALLING);
-    m_irqTriggered.store(false, std::memory_order_relaxed);
-    LOG_INFO(m_name, "IRQ interrupt attached on GPIO%d", m_config.irqPin);
-    return true;
-}
-
-void Pn532Service::detachIrqInterrupt()
-{
-    detachInterrupt(digitalPinToInterrupt(m_config.irqPin));
-    s_activeInstance = nullptr;
-    m_irqTriggered.store(false, std::memory_order_relaxed);
-    LOG_INFO(m_name, "IRQ interrupt detached");
 }
 
 void Pn532Service::handlePowerStateChange(const PowerEvent &power)
