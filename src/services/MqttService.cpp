@@ -169,7 +169,11 @@ bool MqttService::publish(const char *topicSuffix, const char *payload, bool ret
         return false;
     }
 
-    const auto success{m_mqttClient.publish(buildTopic(topicSuffix).c_str(), payload, retained)};
+    // Build topic into a stack buffer — zero heap allocation per publish call
+    char topicBuf[96];
+    snprintf(topicBuf, sizeof(topicBuf), "%s%s", m_topicPrefix.c_str(), topicSuffix);
+
+    const auto success{m_mqttClient.publish(topicBuf, payload, retained)};
 
     if (success)
     {
@@ -193,8 +197,9 @@ bool MqttService::subscribe(const char *topicSuffix)
     if (!m_mqttClient.connected())
         return false;
 
-    std::string topic = buildTopic(topicSuffix);
-    return m_mqttClient.subscribe(topic.c_str());
+    char topicBuf[96];
+    snprintf(topicBuf, sizeof(topicBuf), "%s%s", m_topicPrefix.c_str(), topicSuffix);
+    return m_mqttClient.subscribe(topicBuf);
 }
 
 bool MqttService::unsubscribe(const char *topicSuffix)
@@ -202,8 +207,9 @@ bool MqttService::unsubscribe(const char *topicSuffix)
     if (!m_mqttClient.connected())
         return false;
 
-    std::string topic = buildTopic(topicSuffix);
-    return m_mqttClient.unsubscribe(topic.c_str());
+    char topicBuf[96];
+    snprintf(topicBuf, sizeof(topicBuf), "%s%s", m_topicPrefix.c_str(), topicSuffix);
+    return m_mqttClient.unsubscribe(topicBuf);
 }
 
 std::string MqttService::buildTopic(const char *suffix) const
@@ -311,13 +317,17 @@ std::uint32_t MqttService::calculateBackoff() const noexcept
 
     // Exponential backoff with jitter
     auto backoff = m_config.reconnectMinIntervalMs * (1 << min(m_consecutiveFailures, 5U));
-    if (backoff > m_config.reconnectMaxIntervalMs)
+    if (backoff >= m_config.reconnectMaxIntervalMs)
     {
         backoff = m_config.reconnectMaxIntervalMs;
+        // Extra spread at ceiling to avoid thundering-herd on multi-device reconnect
+        backoff += random(0, 5000);
     }
-
-    // Add 10% jitter
-    backoff += random(0, backoff / 10);
+    else
+    {
+        // Add 10% jitter below the ceiling
+        backoff += random(0, backoff / 10);
+    }
     return backoff;
 }
 

@@ -2,14 +2,16 @@
 
 #include "common/Logger.hpp"
 #include "platform/PlatformPower.hpp"
+#include "services/AttendanceService.hpp"
 
 namespace isic
 {
 
-PowerService::PowerService(EventBus &bus, const PowerConfig &config)
+PowerService::PowerService(EventBus &bus, const PowerConfig &config, const AttendanceService &attendanceService)
     : ServiceBase("PowerService")
     , m_bus(bus)
     , m_config(config)
+    , m_attendanceService(attendanceService)
 {
     eventConnections_.reserve(12);
     eventConnections_.push_back(m_bus.subscribeScoped(EventType::WifiConnected, [this](const Event &e) {
@@ -271,6 +273,16 @@ bool PowerService::canEnterSleep(const PowerState state, SleepBlockReason *reaso
         return false;
     }
 
+    // Don't sleep while MQTT is up and there are queued offline records to flush
+    if (m_mqttReady && m_attendanceService.getOfflineBufferSize() > 0)
+    {
+        if (reason != nullptr)
+        {
+            *reason = SleepBlockReason::OfflinePending;
+        }
+        return false;
+    }
+
     return true;
 }
 
@@ -287,6 +299,9 @@ void PowerService::noteSleepBlocked(const SleepBlockReason reason)
         case SleepBlockReason::OtaUpdate:
             ++m_metrics.sleepBlockedByOta;
             LOG_DEBUG(m_name, "Sleep blocked: OTA update in progress");
+            break;
+        case SleepBlockReason::OfflinePending:
+            LOG_DEBUG(m_name, "Sleep blocked: offline records pending flush");
             break;
         case SleepBlockReason::None:
         default:

@@ -122,6 +122,11 @@ private:
     std::uint32_t m_lastPollMs{0};
     std::vector<EventBus::ScopedConnection> m_eventConnections{};
 
+    // Non-blocking state machine for active polling fallback (item 4)
+    enum class FallbackPollState : std::uint8_t { Idle, WaitDetect };
+    FallbackPollState m_fallbackPollState{FallbackPollState::Idle};
+    std::uint32_t m_fallbackDetectStartMs{0};
+
     std::atomic_bool m_irqTriggered{false};
     bool m_isAsleep{false};
     bool m_activeIrqConfigured{false};

@@ -164,11 +164,13 @@ public:
         m_pendingRead = other.m_pendingRead;
         m_pendingWrite = other.m_pendingWrite;
         m_pendingCount = other.m_pendingCount;
+        m_dropCount = other.m_dropCount;
         m_nextId = other.m_nextId;
         other.m_nextId = 0;
         other.m_pendingRead = 0;
         other.m_pendingWrite = 0;
         other.m_pendingCount = 0;
+        other.m_dropCount = 0;
     }
 
     Signal &operator=(Signal &&other) noexcept
@@ -183,11 +185,13 @@ public:
             m_pendingRead = other.m_pendingRead;
             m_pendingWrite = other.m_pendingWrite;
             m_pendingCount = other.m_pendingCount;
+            m_dropCount = other.m_dropCount;
             m_nextId = other.m_nextId;
             other.m_nextId = 0;
             other.m_pendingRead = 0;
             other.m_pendingWrite = 0;
             other.m_pendingCount = 0;
+            other.m_dropCount = 0;
         }
         return *this;
     }
@@ -304,11 +308,12 @@ public:
             }
         }
 
-        // Ring buffer overflow: drop oldest event
+        // Ring buffer overflow: drop oldest event and count the loss
         if (m_pendingCount >= kMaxPendingEvents)
         {
             m_pendingRead = (m_pendingRead + 1) % kMaxPendingEvents;
             --m_pendingCount;
+            ++m_dropCount;
         }
 
         // Store in ring buffer
@@ -381,6 +386,13 @@ public:
     {
         LockGuard<Mutex> lock(m_mutex);
         return m_pendingCount;
+    }
+
+    /// Cumulative number of events dropped due to ring buffer overflow
+    [[nodiscard]] std::size_t dropCount() const
+    {
+        LockGuard<Mutex> lock(m_mutex);
+        return m_dropCount;
     }
 
     /// Number of connected subscribers
@@ -466,6 +478,7 @@ private:
     std::size_t m_pendingRead{0};
     std::size_t m_pendingWrite{0};
     std::size_t m_pendingCount{0};
+    std::size_t m_dropCount{0};
 };
 } // namespace isic
 

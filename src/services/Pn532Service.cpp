@@ -280,6 +280,47 @@ void Pn532Service::loop()
 
     const auto pollIntervalMs = lowPowerPollingMode ? getSleepPollIntervalMs() : getActivePollingIntervalMs();
     const auto readTimeoutMs = lowPowerPollingMode ? getSleepReadTimeoutMs() : getActivePollingTimeoutMs();
+
+    // Active polling fallback: non-blocking state machine (never blocks in task callback)
+    if (m_activePollingFallback && !lowPowerPollingMode)
+    {
+        if (m_fallbackPollState == FallbackPollState::Idle)
+        {
+            if (millis() - m_lastPollMs >= pollIntervalMs)
+            {
+                m_lastPollMs = millis();
+                m_fallbackDetectStartMs = m_lastPollMs;
+                m_irqPrev = m_irqCurr = HIGH;
+                if (m_pn532->startPassiveTargetIDDetection(PN532_MIFARE_ISO14443A))
+                {
+                    handleCardDetected(); // card already present at detection start
+                }
+                else
+                {
+                    m_fallbackPollState = FallbackPollState::WaitDetect;
+                }
+            }
+        }
+        else // WaitDetect
+        {
+            m_irqCurr = digitalRead(m_config.irqPin);
+            if (m_irqCurr == LOW && m_irqPrev == HIGH)
+            {
+                handleCardDetected();
+                m_fallbackPollState = FallbackPollState::Idle;
+            }
+            else if (millis() - m_fallbackDetectStartMs >= pollIntervalMs)
+            {
+                // No card in this window — reset and wait for next interval
+                m_fallbackPollState = FallbackPollState::Idle;
+                m_lastPollMs = millis();
+            }
+            m_irqPrev = m_irqCurr;
+        }
+        return;
+    }
+
+    // Normal polling (non-fallback, or low-power mode)
     if (millis() - m_lastPollMs >= pollIntervalMs)
     {
         m_lastPollMs = millis();
@@ -384,6 +425,7 @@ void Pn532Service::activateActivePollingFallback(const std::uint32_t nowMs, cons
     if (!m_activePollingFallback)
     {
         m_activePollingFallback = true;
+        m_fallbackPollState = FallbackPollState::Idle;
         ++m_metrics.activePollFallbackEntries;
         LOG_WARN(m_name, "Active scan mode -> poll-fallback (%s)", reason);
         return;
@@ -403,6 +445,7 @@ void Pn532Service::maybeRecoverActiveIrq(const std::uint32_t nowMs)
     {
         m_activeIrqEnabled = true;
         m_activePollingFallback = false;
+        m_fallbackPollState = FallbackPollState::Idle;
         m_activeIrqRetryAtMs = 0;
         LOG_INFO(m_name, "Active scan mode -> recovered-to-irq");
         return;
@@ -543,6 +586,8 @@ void Pn532Service::publishCardEvent(const std::uint8_t *uid, const std::uint8_t 
     m_powerMode = Pn532PowerMode::ActiveScan;
     m_wakeRetryAtMs = 0;
     m_bus.publish({EventType::CardScanned, CardEvent{.timestampMs = m_lastCardReadMs, .uid = m_lastCardUid}});
+    // Dispatch immediately to cut scan→feedback latency from ~110 ms (next EventBus tick) to ~0 ms
+    m_bus.dispatch();
 }
 
 bool Pn532Service::enterSleep()

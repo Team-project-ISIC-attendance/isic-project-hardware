@@ -348,6 +348,7 @@ struct OtaConfig
         static constexpr auto kDefaultIntervalTimeDownload{100};
         static constexpr auto kDefaultCheckStuckTimeMs{2000};
         static constexpr auto kProgressPublishIntervalMs{500};
+        static constexpr auto kManifestTimeoutMs{5000}; // Short timeout for JSON manifest only
     };
     static constexpr auto kDefaultEnabled{true};
     static constexpr auto kDefaultCheckOnConnect{true};

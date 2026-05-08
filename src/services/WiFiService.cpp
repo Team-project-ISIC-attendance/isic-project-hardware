@@ -109,8 +109,17 @@ void WiFiService::loop()
             break;
         }
         case WiFiState::ApMode: {
-            // AP mode handling - DNS server is non-blocking
             m_dnsServer.processNextRequest();
+            // Enforce AP timeout: only reset m_apStartMs in startApMode(), not here
+            if (m_config.accessPointModeTimeoutMs > 0 &&
+                (millis() - m_apStartMs) >= m_config.accessPointModeTimeoutMs)
+            {
+                LOG_INFO(m_name, "AP timeout — switching back to station mode");
+                stopApMode();
+                m_wifiState = WiFiState::Disconnected;
+                m_lastReconnectAttemptMs = 0;
+                connectToStation();
+            }
             break;
         }
         case WiFiState::Disconnected: {
@@ -152,6 +161,11 @@ void WiFiService::end()
     LOG_INFO(m_name, "Stopped");
 }
 
+int8_t WiFiService::getRssi() const
+{
+    return isConnected() ? static_cast<int8_t>(WiFi.RSSI()) : 0;
+}
+
 void WiFiService::startApMode()
 {
     auto apSsid{m_config.accessPointSsidPrefix};
@@ -183,6 +197,7 @@ void WiFiService::startApMode()
 
     m_wifiState = WiFiState::ApMode;
     m_apActive = true;
+    m_apStartMs = millis(); // reset timeout only when AP actually starts
 
     LOG_INFO(m_name, "AP started, IP: %s", WiFi.softAPIP().toString().c_str());
     m_bus.publish(EventType::WifiApStarted);

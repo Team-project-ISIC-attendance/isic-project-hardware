@@ -61,7 +61,7 @@ public:
     }
 
 private:
-    void queuePattern(const FeedbackPattern &pattern);
+    void queueBuiltinPattern(std::uint8_t index);
     void executePattern(const FeedbackPattern &pattern);
 
     void setLed(LedColor color);
@@ -72,8 +72,8 @@ private:
     EventBus &m_bus;
     FeedbackConfig &m_config;
 
-    // Pattern queue (circular buffer)
-    std::array<FeedbackPattern, FeedbackConfig::Constants::kPatternQueueSize> m_patternQueue{};
+    // Pattern queue (circular buffer) — stores builtin pattern indices, not full structs
+    std::array<std::uint8_t, FeedbackConfig::Constants::kPatternQueueSize> m_patternQueue{};
     std::uint8_t m_queueHead{0}; ///< Read index
     std::uint8_t m_queueTail{0}; ///< Write index
     std::uint8_t m_queueCount{0}; ///< Current queue size

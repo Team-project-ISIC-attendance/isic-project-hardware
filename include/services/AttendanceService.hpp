@@ -46,7 +46,7 @@ public:
 
     [[nodiscard]] std::size_t getOfflineBufferSize() const noexcept
     {
-        return m_offlineBatch.size();
+        return m_offlineCount;
     }
 
     [[nodiscard]] bool isOfflineMode() const noexcept
@@ -88,8 +88,11 @@ private:
     std::uint32_t m_batchStartMs{0};
     std::uint32_t m_sequenceNumber{0};
 
-    // Offline buffer
-    std::vector<AttendanceRecord> m_offlineBatch{};
+    // Offline buffer — ring buffer for O(1) push/pop
+    std::vector<AttendanceRecord> m_offlineRing{};
+    std::uint16_t m_offlineHead{0};
+    std::uint16_t m_offlineTail{0};
+    std::uint16_t m_offlineCount{0};
     std::uint32_t m_lastOfflineRetryMs{0};
 
     // Debounce cache

@@ -10,6 +10,8 @@
 
 namespace isic
 {
+class AttendanceService;
+
 class PowerService : public ServiceBase
 {
 public:
@@ -22,7 +24,7 @@ public:
         NfcReady = (1 << 4), // Bit 4: NFC reader ready
     };
 
-    PowerService(EventBus &bus, const PowerConfig &config);
+    PowerService(EventBus &bus, const PowerConfig &config, const AttendanceService &attendanceService);
     ~PowerService() override;
 
     PowerService(const PowerService &) = delete;
@@ -91,6 +93,7 @@ private:
         None,
         AccessPoint,
         OtaUpdate,
+        OfflinePending,
     };
 
     void handleWifiConnected(const Event &event);
@@ -134,6 +137,7 @@ private:
 
     EventBus &m_bus;
     const PowerConfig &m_config;
+    const AttendanceService &m_attendanceService;
 
     bool m_wifiReady{false};
     bool m_mqttReady{false};

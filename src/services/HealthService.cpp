@@ -2,7 +2,7 @@
 
 #include "common/Logger.hpp"
 #include "platform/PlatformESP.hpp"
-#include "platform/PlatformWiFi.hpp" // TODO: is bad for our architecture to depend on WiFi here, but we need signal strength
+#include "services/WiFiService.hpp"
 
 #include <ArduinoJson.h>
 
@@ -23,10 +23,11 @@ constexpr auto *kHealthPublishTopic{"health"};
 constexpr auto *kMetricsPublishTopic{"metrics"};
 } // namespace
 
-HealthService::HealthService(EventBus &bus, HealthConfig &config)
+HealthService::HealthService(EventBus &bus, HealthConfig &config, WiFiService &wifiService)
     : ServiceBase("HealthService")
     , m_bus(bus)
     , m_config(config)
+    , m_wifiService(wifiService)
 {
     m_components.reserve(HealthConfig::Constants::kMaxComponentsCount);
 
@@ -215,10 +216,9 @@ void HealthService::updateSystemHealth()
     m_systemHealth.fragmentationState = (heapFrag > HealthConfig::Constants::kFragmentationWarningThresholdPercent) ? HealthState::Warning
                                                                                                                     : HealthState::Healthy;
 
-    // can be situation where WiFi is not connected but we still want to save health state
-    if (WiFi.isConnected())
+    if (m_wifiService.isConnected())
     {
-        const auto rssi{WiFi.RSSI()};
+        const auto rssi{m_wifiService.getRssi()};
         m_systemHealth.wifiRssi = rssi;
         m_systemHealth.wifiState = (rssi < HealthConfig::Constants::kRssiCriticalThresholdDbm)  ? HealthState::Critical
                                    : (rssi < HealthConfig::Constants::kRssiWarningThresholdDbm) ? HealthState::Warning
@@ -341,5 +341,40 @@ void HealthService::publishMetricsUpdate()
                                 .retain = true}});
 
     LOG_INFO(m_name, "Publishing metrics update");
+}
+
+void HealthService::setupWebRoute(AsyncWebServer &server)
+{
+    server.on("/health", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        publishHealthSnapshot(request);
+    });
+
+#ifdef ISIC_DEBUG
+    server.on("/log", HTTP_GET, [](AsyncWebServerRequest *request) {
+        static char logBuf[isic::log::RingLogger::kBufSize + 1];
+        isic::log::RingLogger::copyTo(logBuf, sizeof(logBuf));
+        request->send(200, "text/plain", logBuf);
+    });
+#endif
+}
+
+void HealthService::publishHealthSnapshot(AsyncWebServerRequest *request)
+{
+    updateSystemHealth();
+
+    JsonDocument doc;
+    doc["state"] = toString(m_systemHealth.overallState);
+    doc["uptime_s"] = m_systemHealth.uptimeMs / 1000;
+    doc["cpu_freq"] = m_systemHealth.cpuFrequencyMs;
+    doc["free_heap"] = m_systemHealth.freeHeap;
+    doc["heap_state"] = toString(m_systemHealth.heapState);
+    doc["heap_fragm"] = m_systemHealth.heapFragmentation;
+    doc["wifi_rssi"] = m_systemHealth.wifiRssi;
+    doc["wifi_state"] = toString(m_systemHealth.wifiState);
+    doc["event_drops"] = m_bus.totalDropCount();
+
+    char buf[512];
+    const auto len = serializeJson(doc, buf, sizeof(buf));
+    request->send(200, "application/json", String(buf, len));
 }
 } // namespace isic

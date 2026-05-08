@@ -17,8 +17,8 @@ App::App()
     , m_pn532Service(m_eventBus, m_configService)
     , m_attendanceService(m_eventBus, m_configService.getMutable().attendance)
     , m_feedbackService(m_eventBus, m_configService.getMutable().feedback)
-    , m_healthService(m_eventBus, m_configService.getMutable().health)
-    , m_powerService(m_eventBus, m_configService.getMutable().power)
+    , m_healthService(m_eventBus, m_configService.getMutable().health, m_wifiService)
+    , m_powerService(m_eventBus, m_configService.getMutable().power, m_attendanceService)
 {
     LOG_INFO(TAG, "ISIC Attendance System");
     LOG_INFO(TAG, "Firmware: %s", DeviceConfig::Constants::kFirmwareVersion);
@@ -115,6 +115,9 @@ Status App::begin()
     m_healthService.registerComponent(&m_powerService);
     m_healthService.registerComponent(&m_feedbackService);
     m_healthService.registerComponent(&m_otaService);
+    // Register /health HTTP endpoint (item 21)
+    m_healthService.setupWebRoute(m_webServer);
+
     // Start web server after all services have registered their routes
     startWebServer();
 

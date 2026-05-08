@@ -21,22 +21,6 @@ void serializeRecord(const JsonObject &obj, const AttendanceRecord &record)
     obj["seq"] = record.sequence;
 }
 
-std::string serializeBatch(const std::vector<AttendanceRecord> &records)
-{
-    JsonDocument doc;
-    const auto arr{doc.to<JsonArray>()};
-
-    for (const auto &record: records)
-    {
-        serializeRecord(arr.add<JsonObject>(), record);
-    }
-
-    std::string json;
-    json.reserve(measureJson(doc) + 1);
-    serializeJson(doc, json);
-
-    return json; // NRVO must apply
-}
 } // namespace
 
 AttendanceService::AttendanceService(EventBus &bus, const AttendanceConfig &config)
@@ -45,7 +29,10 @@ AttendanceService::AttendanceService(EventBus &bus, const AttendanceConfig &conf
     , m_config(config)
 {
     m_batch.reserve(m_config.batchMaxSize);
-    m_offlineBatch.reserve(m_config.offlineBufferSize);
+    if (m_config.offlineBufferSize > 0)
+    {
+        m_offlineRing.resize(m_config.offlineBufferSize);
+    }
 
     m_eventConnections.reserve(4);
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::CardScanned, [this](const Event &e) {
@@ -62,11 +49,44 @@ AttendanceService::AttendanceService(EventBus &bus, const AttendanceConfig &conf
         m_useOfflineMode = true;
     }));
 
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event /*e*/) {
-        // Reload config on changes
-        LOG_INFO(m_name, "Config changed, reloading...");
-        // In this simplified example, we assume m_config is updated externally
-        // TODO: handle dynamic config changes if needed
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event & /*e*/) {
+        // m_config is a live reference — values are already updated by ConfigService
+        LOG_INFO(m_name, "Config updated: batch=%u, offline=%u, debounce=%ums",
+                 m_config.batchMaxSize, m_config.offlineBufferSize, m_config.debounceIntervalMs);
+
+        // Trim live batch if new max is smaller
+        while (m_batch.size() > m_config.batchMaxSize)
+        {
+            m_batch.pop_back();
+        }
+
+        // Trim offline ring buffer to new capacity, applying current overflow policy
+        const std::size_t newCap = m_config.offlineBufferSize;
+        if (newCap == 0)
+        {
+            m_offlineHead = m_offlineTail = m_offlineCount = 0;
+        }
+        else
+        {
+            while (m_offlineCount > newCap)
+            {
+                switch (m_config.offlineQueuePolicy)
+                {
+                    case AttendanceConfig::OfflineQueuePolicy::DropOldest:
+                        m_offlineHead = (m_offlineHead + 1) % m_offlineRing.size();
+                        break;
+                    case AttendanceConfig::OfflineQueuePolicy::DropNewest:
+                    case AttendanceConfig::OfflineQueuePolicy::DropAll:
+                        if (m_offlineTail == 0)
+                            m_offlineTail = m_offlineRing.size() - 1;
+                        else
+                            --m_offlineTail;
+                        break;
+                }
+                --m_offlineCount;
+            }
+            m_offlineRing.resize(newCap);
+        }
     }));
 }
 
@@ -100,7 +120,7 @@ void AttendanceService::loop()
         }
     }
 
-    if (!m_offlineBatch.empty() && !m_useOfflineMode)
+    if (m_offlineCount > 0 && !m_useOfflineMode)
     {
         if (hasTimeElapsed(m_lastOfflineRetryMs, now, m_config.offlineBufferFlushIntervalMs))
         {
@@ -161,7 +181,7 @@ bool AttendanceService::shouldProcessCard(const CardUid &cardUid, const std::uin
     // Search for existing entry and update in-place if found
     for (auto &[uid, lastSeenMs]: m_debounceCache)
     {
-        if ((lastSeenMs != 0) && (uid == cardUid))
+        if ((lastSeenMs != 0) && (memcmp(uid.data(), cardUid.data(), kCardUidMaxSize) == 0))
         {
             if (!hasTimeElapsed(lastSeenMs, timestampMs, m_config.debounceIntervalMs))
             {
@@ -229,12 +249,21 @@ void AttendanceService::flushBatch()
         return;
     }
 
-    // Online mode: serialize and publish
+    // Online mode: serialize into stack buffer and publish
     const auto recordCount{m_batch.size()};
-    auto json{serializeBatch(m_batch)};
 
-    LOG_INFO(m_name, "Flush: %u records, %u bytes", recordCount, json.length());
-    m_bus.publish(Event{EventType::MqttPublishRequest, MqttEvent{"attendance", std::move(json), false}});
+    JsonDocument doc;
+    const auto arr{doc.to<JsonArray>()};
+    for (const auto &record: m_batch)
+    {
+        serializeRecord(arr.add<JsonObject>(), record);
+    }
+
+    char buf[512];
+    const auto len{serializeJson(doc, buf, sizeof(buf))};
+
+    LOG_INFO(m_name, "Flush: %u records, %u bytes", recordCount, len);
+    m_bus.publish(Event{EventType::MqttPublishRequest, MqttEvent{"attendance", std::string(buf, len), false}});
 
     ++m_metrics.batchesSent;
     m_batch.clear();
@@ -242,40 +271,48 @@ void AttendanceService::flushBatch()
 
 void AttendanceService::addToOfflineBatch(const AttendanceRecord &record)
 {
-    // Fast path: buffer has room
-    if (m_offlineBatch.size() < m_config.offlineBufferSize)
+    const auto cap{static_cast<std::uint16_t>(m_offlineRing.size())};
+    if (cap == 0)
     {
-        m_offlineBatch.push_back(record);
         return;
     }
 
-    ++m_metrics.errorCount; // Count as error because we couldn't send it, add data loss
+    if (m_offlineCount < cap)
+    {
+        // Fast path: ring has room — O(1)
+        m_offlineRing[m_offlineTail] = record;
+        m_offlineTail = static_cast<std::uint16_t>((m_offlineTail + 1) % cap);
+        ++m_offlineCount;
+        return;
+    }
 
-    // Slow path: buffer is full - apply policy
+    // Slow path: buffer full — apply policy
+    ++m_metrics.errorCount;
+
     switch (m_config.offlineQueuePolicy)
     {
         case AttendanceConfig::OfflineQueuePolicy::DropOldest: {
-            // Remove first element (oldest) - O(n) but rare operation
-            m_offlineBatch.erase(m_offlineBatch.begin());
-            m_offlineBatch.push_back(record);
+            // Overwrite oldest slot — O(1)
+            m_offlineRing[m_offlineTail] = record;
+            m_offlineTail = static_cast<std::uint16_t>((m_offlineTail + 1) % cap);
+            m_offlineHead = static_cast<std::uint16_t>((m_offlineHead + 1) % cap);
             LOG_WARN(m_name, "Buffer full: dropped oldest");
             break;
         }
         case AttendanceConfig::OfflineQueuePolicy::DropNewest: {
-            // Simply don't add the new record
             LOG_WARN(m_name, "Buffer full: dropped newest");
             break;
         }
         case AttendanceConfig::OfflineQueuePolicy::DropAll: {
-            // Nuclear option - clear everything, start fresh
-            m_offlineBatch.clear();
-            m_offlineBatch.push_back(record);
+            m_offlineHead = 0;
+            m_offlineTail = 1 % cap;
+            m_offlineCount = 1;
+            m_offlineRing[0] = record;
             LOG_WARN(m_name, "Buffer full: cleared all");
             break;
         }
         default: {
-            // Defensive: unknown policy, drop newest (safest)
-            LOG_WARN(m_name, "Buffer full: unknown policy");
+            LOG_WARN(m_name, "Buffer full: unknown policy, dropped newest");
             break;
         }
     }
@@ -283,18 +320,31 @@ void AttendanceService::addToOfflineBatch(const AttendanceRecord &record)
 
 void AttendanceService::flushOfflineBatch()
 {
-    if (m_offlineBatch.empty() || m_useOfflineMode)
+    if (m_offlineCount == 0 || m_useOfflineMode)
     {
         return;
     }
 
-    const auto recordCount{m_offlineBatch.size()};
-    auto json{serializeBatch(m_offlineBatch)};
+    const auto cap{static_cast<std::uint16_t>(m_offlineRing.size())};
+    const auto recordCount{m_offlineCount};
 
-    LOG_INFO(m_name, "Offline flush: %u records, %u bytes", recordCount, json.length());
-    m_bus.publish(Event{EventType::MqttPublishRequest, MqttEvent{"attendance", std::move(json), false}});
+    JsonDocument doc;
+    const auto arr{doc.to<JsonArray>()};
+    for (std::uint16_t i = 0; i < recordCount; ++i)
+    {
+        const auto idx{static_cast<std::uint16_t>((m_offlineHead + i) % cap)};
+        serializeRecord(arr.add<JsonObject>(), m_offlineRing[idx]);
+    }
 
-    m_offlineBatch.clear();
+    char buf[512];
+    const auto len{serializeJson(doc, buf, sizeof(buf))};
+
+    LOG_INFO(m_name, "Offline flush: %u records, %u bytes", recordCount, len);
+    m_bus.publish(Event{EventType::MqttPublishRequest, MqttEvent{"attendance", std::string(buf, len), false}});
+
+    m_offlineHead = 0;
+    m_offlineTail = 0;
+    m_offlineCount = 0;
     ++m_metrics.batchesSent;
 }
 } // namespace isic

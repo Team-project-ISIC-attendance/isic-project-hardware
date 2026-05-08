@@ -566,7 +566,10 @@ ConfigService::~ConfigService()
 {
     if (m_dirty)
     {
-        (void) saveNow(); // TODO: handle failure? i think in destructor we can't do much about it so just ignore
+        if (saveNow().failed())
+        {
+            LOG_ERROR(m_name, "Destructor: save failed; changes lost");
+        }
     }
 }
 
@@ -598,7 +601,11 @@ Status ConfigService::begin()
             LittleFS.remove(kConfigFile);
         }
 
-        (void) saveNow(); // TODO: handle failure?
+        if (saveNow().failed())
+        {
+            LOG_ERROR(m_name, "Failed to write defaults to filesystem");
+            m_bus.publish(EventType::ConfigError);
+        }
     }
 
     setState(ServiceState::Running);
@@ -611,8 +618,15 @@ void ConfigService::loop()
 {
     if (m_dirty)
     {
-        (void) saveNow(); // TODO: handle failure?
-        m_dirty = false;
+        if (saveNow().ok())
+        {
+            m_dirty = false;
+        }
+        else
+        {
+            LOG_WARN(m_name, "Save failed — will retry next tick");
+            m_bus.publish(EventType::ConfigError);
+        }
     }
 }
 
@@ -620,7 +634,10 @@ void ConfigService::end()
 {
     if (m_dirty)
     {
-        (void) saveNow(); // TODO: handle failure?
+        if (saveNow().failed())
+        {
+            LOG_ERROR(m_name, "Shutdown: save failed; changes lost");
+        }
     }
 
     m_eventConnections.clear();
@@ -647,6 +664,7 @@ Status ConfigService::saveNow()
     JsonDocument doc;
     serializeToJsonDocument(doc, m_config);
     const auto expectedSize{measureJson(doc)};
+    yield(); // Feed WDT before blocking LittleFS write
     const auto written{serializeJson(doc, file)};
     file.close();
 
@@ -757,7 +775,12 @@ Status ConfigService::reset()
     LOG_INFO(m_name, "Resetting to defaults");
     m_config.restoreDefaults();
 
-    const auto status{saveNow()}; // TODO: handle failure?
+    const auto status{saveNow()};
+    if (status.failed())
+    {
+        LOG_ERROR(m_name, "Reset: save failed: %s", status.message ? status.message : "unknown");
+        m_bus.publish(EventType::ConfigError);
+    }
     m_bus.publish(EventType::ConfigChanged);
 
     return status;

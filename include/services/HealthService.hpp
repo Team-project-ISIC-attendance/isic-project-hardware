@@ -6,15 +6,20 @@
 #include "core/IService.hpp"
 
 #include <Arduino.h>
+#include <ESPAsyncWebServer.h>
 #include <array>
 #include <vector>
 
 namespace isic
 {
+class WiFiService;
+
 class HealthService : public ServiceBase
 {
 public:
-    HealthService(EventBus &bus, HealthConfig &config);
+    HealthService(EventBus &bus, HealthConfig &config, WiFiService &wifiService);
+
+    void setupWebRoute(AsyncWebServer &server);
     ~HealthService() override = default;
 
     HealthService(const HealthService &) = delete;
@@ -53,9 +58,12 @@ private:
 
     void updateSystemHealth();
 
+    void publishHealthSnapshot(AsyncWebServerRequest *request);
+
     // Dependencies
     EventBus &m_bus;
     HealthConfig &m_config;
+    WiFiService &m_wifiService;
 
     // Registered health reporters
     std::vector<const IService *> m_components{};

@@ -162,7 +162,7 @@ void OtaService::checkForUpdate()
 bool OtaService::fetchManifest(std::string &outVersion, std::string &outMd5, std::uint32_t &outSize)
 {
     const std::string url{m_config.serverUrl + "/manifest.json"};
-    m_updateHttp.setTimeout(m_config.timeoutMs);
+    m_updateHttp.setTimeout(OtaConfig::Constants::kManifestTimeoutMs);
 
     if (!m_updateHttp.begin(m_updateClient, url.c_str()))
     {
@@ -373,6 +373,7 @@ void OtaService::processDownload()
 
         m_updateDownloaded += bytesWritten;
         m_lastDownloadActivityMs = now;
+        yield(); // Feed WDT after each written chunk
 
         if (m_updateTotalSize > 0)
         {

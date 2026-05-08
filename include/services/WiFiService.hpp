@@ -46,6 +46,7 @@ public:
     {
         return m_wifiState == WiFiState::ApMode;
     }
+    [[nodiscard]] int8_t getRssi() const;
 
     void serializeMetrics(JsonObject &obj) const override
     {

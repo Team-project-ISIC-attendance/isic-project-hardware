@@ -246,6 +246,20 @@ public:
         return total;
     }
 
+    /// Cumulative events dropped across all signals due to ring buffer overflow
+    [[nodiscard]] std::size_t totalDropCount() const
+    {
+        std::size_t total{0};
+        for (const auto &signal: m_signals)
+        {
+            if (signal)
+            {
+                total += signal->dropCount();
+            }
+        }
+        return total;
+    }
+
 private:
     using SignalPtr = std::unique_ptr<SignalType>;
 

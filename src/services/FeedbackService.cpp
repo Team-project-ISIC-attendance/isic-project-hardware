@@ -54,6 +54,23 @@ constexpr FeedbackPattern PATTERN_OTA_START{
 constexpr FeedbackPattern PATTERN_OTA_COMPLETE{
         .ledOnMs = 100, .ledOffMs = 50, .beepMs = 60, .beepFrequencyHz = 3200,
         .repeatCount = 5, .color = LedColor::Green};
+
+// Indices into kBuiltinPatterns — must match table order below
+constexpr std::uint8_t kIdxError{0};
+constexpr std::uint8_t kIdxProcessing{1};
+constexpr std::uint8_t kIdxConnected{2};
+constexpr std::uint8_t kIdxDisconnected{3};
+constexpr std::uint8_t kIdxOtaStart{4};
+constexpr std::uint8_t kIdxOtaComplete{5};
+
+static constexpr FeedbackPattern kBuiltinPatterns[]{
+        PATTERN_ERROR,
+        PATTERN_PROCESSING,
+        PATTERN_CONNECTED,
+        PATTERN_DISCONNECTED,
+        PATTERN_OTA_START,
+        PATTERN_OTA_COMPLETE,
+};
 } // anonymous namespace
 
 FeedbackService::FeedbackService(EventBus &bus, FeedbackConfig &config)
@@ -167,9 +184,10 @@ void FeedbackService::loop()
         // Not executing pattern - check queue
         if (m_queueCount > 0)
         {
-            executePattern(m_patternQueue[m_queueHead]);
+            const auto idx{m_patternQueue[m_queueHead]};
             m_queueHead = static_cast<std::uint8_t>((m_queueHead + 1) % FeedbackConfig::Constants::kPatternQueueSize);
             m_queueCount--;
+            executePattern(kBuiltinPatterns[idx]);
         }
     }
 }
@@ -199,43 +217,49 @@ void FeedbackService::signalSuccess()
 void FeedbackService::signalError()
 {
     LOG_INFO(m_name, "Signal: error (red x3)");
-    queuePattern(PATTERN_ERROR);
+    queueBuiltinPattern(kIdxError);
 }
 
 void FeedbackService::signalProcessing()
 {
     LOG_INFO(m_name, "Signal: processing (blue x5)");
-    queuePattern(PATTERN_PROCESSING);
+    queueBuiltinPattern(kIdxProcessing);
 }
 
 void FeedbackService::signalConnected()
 {
     LOG_INFO(m_name, "Signal: connected (green long)");
-    queuePattern(PATTERN_CONNECTED);
+    queueBuiltinPattern(kIdxConnected);
 }
 
 void FeedbackService::signalDisconnected()
 {
     LOG_INFO(m_name, "Signal: disconnected (yellow x2)");
-    queuePattern(PATTERN_DISCONNECTED);
+    queueBuiltinPattern(kIdxDisconnected);
 }
 
 void FeedbackService::signalOtaStart()
 {
     LOG_INFO(m_name, "Signal: OTA start (cyan blink)");
     clearQueue();
-    queuePattern(PATTERN_OTA_START);
+    queueBuiltinPattern(kIdxOtaStart);
 }
 
 void FeedbackService::signalOtaComplete()
 {
     LOG_INFO(m_name, "Signal: OTA complete (green x5)");
-    queuePattern(PATTERN_OTA_COMPLETE);
+    queueBuiltinPattern(kIdxOtaComplete);
 }
 
 void FeedbackService::signalCustom(const FeedbackPattern &pattern)
 {
-    queuePattern(pattern);
+    if (!m_enabled)
+    {
+        return;
+    }
+    stopCurrent();
+    clearQueue();
+    executePattern(pattern);
 }
 
 void FeedbackService::beepOnce(const std::uint16_t durationMs)
@@ -261,7 +285,7 @@ void FeedbackService::ledOnce(const std::uint16_t durationMs)
     setLed(LedColor::Off);
 }
 
-void FeedbackService::queuePattern(const FeedbackPattern &pattern)
+void FeedbackService::queueBuiltinPattern(const std::uint8_t index)
 {
     if (!m_enabled)
     {
@@ -274,7 +298,7 @@ void FeedbackService::queuePattern(const FeedbackPattern &pattern)
         return;
     }
 
-    m_patternQueue[m_queueTail] = pattern;
+    m_patternQueue[m_queueTail] = index;
     m_queueTail = static_cast<std::uint8_t>((m_queueTail + 1) % FeedbackConfig::Constants::kPatternQueueSize);
     m_queueCount++;
 }
