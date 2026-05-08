@@ -68,10 +68,31 @@ FeedbackService::FeedbackService(EventBus &bus, FeedbackConfig &config)
         digitalWrite(m_config.buzzerPin, LOW);
     }
 
-    m_eventConnections.reserve(1);
+    m_eventConnections.reserve(2);
 
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::AttendanceRecorded, [this](const Event &) {
         signalSuccess();
+    }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event &) {
+        stopCurrent();
+        clearQueue();
+        m_enabled = m_config.enabled;
+        if (m_enabled) {
+            if (hasLedConfigured()) {
+                if (isRgb()) {
+                    pinMode(m_config.ledRedPin,   OUTPUT);
+                    pinMode(m_config.ledGreenPin, OUTPUT);
+                    pinMode(m_config.ledBluePin,  OUTPUT);
+                } else if (m_config.ledPin != 0xFF) {
+                    pinMode(m_config.ledPin, OUTPUT);
+                }
+                setLed(LedColor::Off);
+            }
+            if (m_config.buzzerEnabled && m_config.buzzerPin != 0xFF) {
+                pinMode(m_config.buzzerPin, OUTPUT);
+                digitalWrite(m_config.buzzerPin, LOW);
+            }
+        }
     }));
 }
 

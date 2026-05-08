@@ -60,6 +60,20 @@ WiFiService::WiFiService(EventBus &bus, ConfigService &config, AsyncWebServer &w
     , m_hasEverConnected(m_config.stationHasEverConnected)
 {
     m_eventConnections.reserve(2);
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event &) {
+        if (m_wifiState == WiFiState::Connected) {
+            if (WiFi.SSID() != m_config.stationSsid.c_str()) {
+                LOG_INFO(m_name, "SSID changed, reconnecting to %s", m_config.stationSsid.c_str());
+                WiFi.disconnect();
+                m_wifiState = WiFiState::Disconnected;
+            } else if (m_config.stationPowerSaveEnabled) {
+                platform::setWiFiLightSleep();
+            } else {
+                platform::setWiFiNormalPower();
+            }
+        }
+        // In Connecting/Disconnected state the next loop() iteration picks up new credentials naturally
+    }));
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::PowerStateChange, [this](const Event &e) {
         handlePowerStateChange(e);
     }));

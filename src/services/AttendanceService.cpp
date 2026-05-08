@@ -62,11 +62,11 @@ AttendanceService::AttendanceService(EventBus &bus, const AttendanceConfig &conf
         m_useOfflineMode = true;
     }));
 
-    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event /*e*/) {
-        // Reload config on changes
-        LOG_INFO(m_name, "Config changed, reloading...");
-        // In this simplified example, we assume m_config is updated externally
-        // TODO: handle dynamic config changes if needed
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event &) {
+        // Runtime params (debounce, batch sizes, policies) are read live from the reference
+        // so no explicit reload is needed. Re-reserve buffers to match updated capacities.
+        m_batch.reserve(m_config.batchMaxSize);
+        m_offlineBatch.reserve(m_config.offlineBufferSize);
     }));
 }
 

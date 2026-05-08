@@ -19,7 +19,18 @@ MqttService::MqttService(EventBus &bus, const MqttConfig &config, const DeviceCo
     s_instance = this;
     m_mqttClient.setClient(m_networkClient); // Bind transport client once during construction
 
-    m_eventConnections.reserve(5);
+    m_eventConnections.reserve(6);
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event &) {
+        rebuildTopicPrefix();
+        if (m_mqttClient.connected()) {
+            m_mqttClient.disconnect();
+            m_mqttState = MqttState::Disconnected;
+            m_consecutiveFailures = 0;
+            m_lastConnectAttemptMs = 0;
+            setState(ServiceState::Ready);
+            LOG_INFO(m_name, "Config updated - reconnecting with new settings");
+        }
+    }));
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::WifiConnected, [this](const Event &e) {
         LOG_DEBUG(m_name, "WiFi connected, attempting MQTT connection");
         m_wifiReady = true;
