@@ -13,248 +13,42 @@ namespace
 {
 // Lifehack when use username field - injected via compile-time string literal concatenation, see below is just not safe but works
 #ifdef ISIC_WIFI_EDUROAM
-#define EDUROAM_USERNAME_FIELD \
-    "            <div class=\"form-group\">\n" \
-    "                <label>WiFi Username (Eduroam)</label>\n" \
-    "                <input type=\"text\" id=\"username\" name=\"username\" placeholder=\"Enter Eduroam username\">\n" \
-    "            </div>\n"
+#define EDUROAM_USERNAME_FIELD "<input name=username placeholder=Username>"
 #else
-#define EDUROAM_USERNAME_FIELD
+#define EDUROAM_USERNAME_FIELD ""
 #endif
 
-// Store HTML in flash memory to save RAM - single constexpr, zero runtime cost
-constexpr char CONFIG_HTML[] PROGMEM = R"(
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ISIC Device Setup</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            min-height: 100vh;
-            padding: 20px;
-            color: #e0e0e0;
-        }
-        .container {
-            max-width: 400px;
-            margin: 0 auto;
-            background: rgba(255,255,255,0.05);
-            border-radius: 16px;
-            padding: 30px;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        h1 {
-            text-align: center;
-            color: #4cc9f0;
-            margin-bottom: 30px;
-            font-size: 24px;
-        }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 500;
-            color: #b0b0b0;
-        }
-        input, select {
-            width: 100%;
-            padding: 12px 15px;
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 8px;
-            background: rgba(0,0,0,0.2);
-            color: #fff;
-            font-size: 16px;
-            transition: border-color 0.3s;
-        }
-        input:focus, select:focus {
-            outline: none;
-            border-color: #4cc9f0;
-        }
-        button {
-            width: 100%;
-            padding: 14px;
-            border: none;
-            border-radius: 8px;
-            background: linear-gradient(135deg, #4cc9f0 0%, #4361ee 100%);
-            color: #fff;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(76, 201, 240, 0.3);
-        }
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
-        .networks {
-            margin-bottom: 20px;
-        }
-        .network {
-            padding: 12px;
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 8px;
-            margin-bottom: 8px;
-            cursor: pointer;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            transition: background 0.2s;
-        }
-        .network:hover {
-            background: rgba(255,255,255,0.05);
-        }
-        .network.selected {
-            border-color: #4cc9f0;
-            background: rgba(76, 201, 240, 0.1);
-        }
-        .signal { color: #888; font-size: 12px; }
-        .lock { margin-left: 8px; }
-        .status {
-            text-align: center;
-            padding: 15px;
-            border-radius: 8px;
-            margin-top: 20px;
-        }
-        .status.success { background: rgba(0,200,100,0.2); color: #4ade80; }
-        .status.error { background: rgba(200,0,0,0.2); color: #f87171; }
-        .divider {
-            border-top: 1px solid rgba(255,255,255,0.1);
-            margin: 25px 0;
-        }
-        h3 { color: #b0b0b0; font-size: 14px; margin-bottom: 15px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>ISIC Device Setup</h1>
-
-        <div class="networks" id="networks">
-            <p style="text-align:center;color:#888">Scanning networks...</p>
-        </div>
-
-        <form id="configForm">
-            <div class="form-group">
-                <label>WiFi Network</label>
-                <input type="text" id="ssid" name="ssid" required placeholder="Enter SSID">
-            </div>
-)" EDUROAM_USERNAME_FIELD R"(
-            <div class="form-group">
-                <label>WiFi Password</label>
-                <input type="password" id="password" name="password" placeholder="Enter password">
-            </div>
-
-            <div class="divider"></div>
-            <h3>MQTT Settings (Optional)</h3>
-
-            <div class="form-group">
-                <label>MQTT Broker</label>
-                <input type="text" id="mqtt_broker" name="mqtt_broker" placeholder="e.g., mqtt.example.com or 192.168.1.100">
-            </div>
-            <div class="form-group">
-                <label>MQTT Port</label>
-                <input type="number" id="mqtt_port" name="mqtt_port" value="1883" placeholder="1883">
-            </div>
-            <div class="form-group">
-                <label>MQTT Username (optional)</label>
-                <input type="text" id="mqtt_username" name="mqtt_username" placeholder="Leave empty if not needed">
-            </div>
-            <div class="form-group">
-                <label>MQTT Password (optional)</label>
-                <input type="password" id="mqtt_password" name="mqtt_password" placeholder="Leave empty if not needed">
-            </div>
-            <div class="form-group">
-                <label>MQTT Base Topic (optional)</label>
-                <input type="text" id="mqtt_base_topic" name="mqtt_base_topic" placeholder="Default: device">
-            </div>
-
-            <button type="submit" id="saveBtn">Save & Reboot</button>
-        </form>
-
-        <div id="status"></div>
-    </div>
-
-    <script>
-        async function scanNetworks() {
-            try {
-                const resp = await fetch('/scan');
-                const data = await resp.json();
-
-                if (data.status === 'scanning') {
-                    setTimeout(scanNetworks, 2000);
-                    return;
-                }
-
-                const container = document.getElementById('networks');
-                if (data.networks && data.networks.length > 0) {
-                    container.innerHTML = data.networks.map(n => `
-                        <div class="network" data-ssid="${n.ssid}">
-                            <span>${n.ssid} ${n.secure ? '🔒' : ''}</span>
-                            <span class="signal">${n.rssi} dBm</span>
-                        </div>
-                    `).join('');
-
-                    document.querySelectorAll('.network').forEach(el => {
-                        el.onclick = () => {
-                            document.querySelectorAll('.network').forEach(e => e.classList.remove('selected'));
-                            el.classList.add('selected');
-                            document.getElementById('ssid').value = el.dataset.ssid;
-                        };
-                    });
-                } else {
-                    container.innerHTML = '<p style="text-align:center;color:#888">No networks found</p>';
-                }
-            } catch (e) {
-                console.error(e);
-            }
-        }
-
-        document.getElementById('configForm').onsubmit = async (e) => {
-            e.preventDefault();
-            const btn = document.getElementById('saveBtn');
-            const status = document.getElementById('status');
-
-            btn.disabled = true;
-            btn.textContent = 'Saving...';
-
-            try {
-                const formData = new FormData(e.target);
-                const resp = await fetch('/save', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await resp.json();
-
-                if (resp.ok) {
-                    status.className = 'status success';
-                    status.textContent = 'Configuration saved! Device is rebooting...';
-                } else {
-                    throw new Error(data.error || 'Save failed');
-                }
-            } catch (err) {
-                status.className = 'status error';
-                status.textContent = err.message;
-                btn.disabled = false;
-                btn.textContent = 'Save & Connect';
-            }
-        };
-
-        scanNetworks();
-    </script>
-</body>
-</html>
-)";
+// Stripped HTML: no doctype/html/head/body (optional in HTML5), MQTT collapsed in <details>
+// Element IDs become implicit globals so no getElementById needed
+constexpr char CONFIG_HTML[] PROGMEM =
+"<meta name=viewport content='width=device-width'>"
+"<style>input,button{display:block;width:100%;margin:5px 0;padding:8px;box-sizing:border-box}"
+"button{background:#4cf;border:0;font-size:1em;cursor:pointer}"
+"#m{padding:5px;display:none}.s{color:#4f4}.e{color:#f88}</style>"
+"<h2>Setup</h2>"
+"<form id=f>"
+"<input name=ssid placeholder=SSID required>"
+EDUROAM_USERNAME_FIELD
+"<input type=password name=password placeholder=Password>"
+"<details><summary>MQTT (optional)</summary>"
+"<input name=mqtt_broker placeholder=Broker>"
+"<input name=mqtt_port value=1883 placeholder=Port>"
+"<input name=mqtt_username placeholder=User>"
+"<input type=password name=mqtt_password placeholder=Pass>"
+"<input name=mqtt_base_topic placeholder='Topic (device)'>"
+"</details>"
+"<button>Save &amp; Reboot</button>"
+"</form>"
+"<div id=m></div>"
+"<script>f.onsubmit=async e=>{"
+"e.preventDefault();"
+"try{"
+"const r=await fetch('/save',{method:'POST',body:new FormData(f)});"
+"m.className=r.ok?'s':'e';"
+"m.textContent=r.ok?'Saved! Rebooting...':(await r.json()).error||'Error';"
+"}catch(x){m.className='e';m.textContent='Error';}"
+"m.style.display='block';"
+"};</script>";
 } // namespace
 
 WiFiService::WiFiService(EventBus &bus, ConfigService &config, AsyncWebServer &webServer)

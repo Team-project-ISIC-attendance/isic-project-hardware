@@ -157,12 +157,14 @@ inline void wiFiPowerUp()
  */
 inline void connectEduroam(const char *ssid, const char *username, const char *password)
 {
+    wifi_station_disconnect(); // clear any previous connection attempt
+
     wifi_set_opmode(STATION_MODE);
 
     struct station_config wifi_config;
     memset(&wifi_config, 0, sizeof(wifi_config));
     strncpy(reinterpret_cast<char *>(wifi_config.ssid), ssid, sizeof(wifi_config.ssid) - 1);
-    wifi_station_set_config(&wifi_config);
+    wifi_station_set_config_current(&wifi_config); // current only, no flash write
 
     wifi_station_clear_cert_key();
     wifi_station_clear_enterprise_ca_cert();
