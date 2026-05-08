@@ -73,6 +73,36 @@ FeedbackService::FeedbackService(EventBus &bus, FeedbackConfig &config)
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::AttendanceRecorded, [this](const Event &) {
         signalSuccess();
     }));
+    // m_eventConnections.push_back(m_bus.subscribeScoped(EventType::NfcReady, [this](const Event &) {
+    //     beepOnce(kReaderReadyBeepMs);
+    // }));
+    // m_eventConnections.push_back(m_bus.subscribeScoped(EventType::WifiConnected, [this](const Event &) {
+    //     signalProcessing(); // WiFi up, still waiting for MQTT
+    // }));
+    // m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
+    //     signalConnected(); // Full connection established
+    // }));
+    // m_eventConnections.push_back(m_bus.subscribeScoped(EventType::WifiDisconnected, [this](const Event &) {
+    //     signalDisconnected();
+    // }));
+    // m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttDisconnected, [this](const Event &) {
+    //     signalDisconnected();
+    // }));
+    // m_eventConnections.push_back(m_bus.subscribeScoped(EventType::OtaStarted, [this](const Event &) {
+    //     signalOtaStart();
+    // }));
+    // m_eventConnections.push_back(m_bus.subscribeScoped(EventType::OtaCompleted, [this](const Event &) {
+    //     signalOtaComplete();
+    // }));
+    // m_eventConnections.push_back(m_bus.subscribeScoped(EventType::OtaError, [this](const Event &) {
+    //     signalError();
+    // }));
+    // m_eventConnections.push_back(m_bus.subscribeScoped(EventType::NfcError, [this](const Event &) {
+    //     signalError();
+    // }));
+    // m_eventConnections.push_back(m_bus.subscribeScoped(EventType::AttendanceError, [this](const Event &) {
+    //     signalError();
+    // }));
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event &) {
         stopCurrent();
         clearQueue();
@@ -237,7 +267,7 @@ void FeedbackService::signalConnected()
 
 void FeedbackService::signalDisconnected()
 {
-    LOG_INFO(m_name, "Signal: disconnected (yellow x2)");
+    LOG_INFO(m_name, "Signal: disconnected (magenta x2)");
     queuePattern(PATTERN_DISCONNECTED);
 }
 

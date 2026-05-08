@@ -14,8 +14,6 @@ namespace isic::log
 #endif
 #endif
 
-// TODO: now is loging to Serial, later must be in file that can read from web interface or serial.
-// TODO: debug mode only with serial logging.
 inline void logPrint(const char *level, const char *tag, const char *fmt, ...)
 {
     char buf[128];

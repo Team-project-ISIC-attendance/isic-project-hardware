@@ -437,8 +437,6 @@ bool deserializePowerConfig(const JsonVariant &json, PowerConfig &powerConfig)
     PARSE_BOOL(json, "pn532SleepBetweenScans", powerConfig.pn532SleepBetweenScans);
     PARSE_BOOL(json, "modemSleepOnMqttDisconnect", powerConfig.modemSleepOnMqttDisconnect);
     PARSE_NUM(json, "activityTypeMask", powerConfig.activityTypeMask);
-    PARSE_NUM(json, "idleTimeoutMs", powerConfig.readerIdleTimeoutMs);
-    PARSE_NUM(json, "smartSleepMediumThresholdMs", powerConfig.modemSleepAfterMs);
 
     return changed;
 }
@@ -566,7 +564,11 @@ ConfigService::~ConfigService()
 {
     if (m_dirty)
     {
-        (void) saveNow(); // TODO: handle failure? i think in destructor we can't do much about it so just ignore
+        LOG_WARN(m_name, "Config has unsaved changes on destruction, attempting to save...");
+        if (saveNow().failed())
+        {
+            LOG_ERROR(m_name, "Final save failed, changes may be lost");
+        }
     }
 }
 
@@ -598,7 +600,10 @@ Status ConfigService::begin()
             LittleFS.remove(kConfigFile);
         }
 
-        (void) saveNow(); // TODO: handle failure?
+        if (saveNow().failed())
+        {
+            LOG_ERROR(m_name, "Failed to save default config");
+        }
     }
 
     setState(ServiceState::Running);
@@ -611,8 +616,11 @@ void ConfigService::loop()
 {
     if (m_dirty)
     {
-        (void) saveNow(); // TODO: handle failure?
-        m_dirty = false;
+        if (saveNow().failed())
+        {
+            LOG_ERROR(m_name, "Periodic save failed, will retry");
+            // m_dirty stays true so the next loop() retries
+        }
     }
 }
 
@@ -620,7 +628,10 @@ void ConfigService::end()
 {
     if (m_dirty)
     {
-        (void) saveNow(); // TODO: handle failure?
+        if (saveNow().failed())
+        {
+            LOG_ERROR(m_name, "Final save failed, changes may be lost");
+        }
     }
 
     m_eventConnections.clear();
@@ -757,10 +768,15 @@ Status ConfigService::reset()
     LOG_INFO(m_name, "Resetting to defaults");
     m_config.restoreDefaults();
 
-    const auto status{saveNow()}; // TODO: handle failure?
+    if (saveNow().failed())
+    {
+        LOG_ERROR(m_name, "Failed to save default config");
+        return Status::Error("Save failed");
+    }
+
     m_bus.publish(EventType::ConfigChanged);
 
-    return status;
+    return Status::Ok();
 }
 
 void ConfigService::handleSetConfigMessage(const std::string &topic, const std::string &payload)

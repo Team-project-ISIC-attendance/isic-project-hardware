@@ -84,13 +84,11 @@ private:
     DNSServer m_dnsServer;
 
     WiFiState m_wifiState{WiFiState::Disconnected};
-    std::uint32_t m_lastCheckMs{0};
     std::uint32_t m_connectStartMs{0};
 
     std::uint32_t m_lastReconnectAttemptMs{0};
     std::uint32_t m_connectAttempts{0};
     std::uint32_t m_apStartMs{0};
-    std::uint8_t m_connectRetries{0};
     bool m_inSlowRetryMode{false};
     bool m_hasEverConnected{false};
     bool m_apActive{false};

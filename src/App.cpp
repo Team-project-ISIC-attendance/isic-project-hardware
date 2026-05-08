@@ -38,12 +38,13 @@ Status App::begin()
         return status;
     }
 
-    // // Initialize OTA early (before WiFi) so routes are registered before web server starts
-    // status = m_otaService.begin();
-    // if (status.failed())
-    // {
-    //     LOG_WARN(TAG, "OtaService init failed - continuing without OTA");
-    // }
+    // Initialize feedback
+    status = m_feedbackService.begin();
+    if (status.failed())
+    {
+        LOG_WARN(TAG, "FeedbackService init failed - continuing without feedback");
+    }
+
 
     // Initialize WiFi (may start in AP mode and begin web server)
     status = m_wifiService.begin();
@@ -89,11 +90,12 @@ Status App::begin()
         return status;
     }
 
-    // Initialize feedback
-    status = m_feedbackService.begin();
+
+     // Initialize OTA early (before WiFi) so routes are registered before web server starts
+    status = m_otaService.begin();
     if (status.failed())
     {
-        LOG_WARN(TAG, "FeedbackService init failed - continuing without feedback");
+        LOG_WARN(TAG, "OtaService init failed - continuing without OTA");
     }
 
     // Allow heap to stabilize before non-critical services

@@ -147,6 +147,14 @@ Status Pn532Service::begin()
         LOG_INFO(m_name, "PN532 sleep configured without IRQ wake");
     }
 
+    m_bus.publish(EventType::NfcReady);
+
+    if (isUsingActiveIrqPrimary())
+    {
+        // Arm IRQ detection during boot so the first scan does not wait for the scheduler tick.
+        startDetection();
+    }
+
     LOG_INFO(m_name, "Pn532Service ready");
     return Status::Ok();
 }

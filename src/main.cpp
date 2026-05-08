@@ -20,7 +20,7 @@ isic::utils::FilesystemCommandHandler fsHandler;
 void setup()
 {
     // Initialize serial for debugging
-    Serial.begin(115200); // TODO: Debug flag for baud rate selection and in debug no need serial.
+    Serial.begin(115200);
     delay(100);
 
     // Print system info
