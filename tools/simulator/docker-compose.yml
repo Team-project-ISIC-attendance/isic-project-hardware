@@ -7,6 +7,8 @@ services:
     environment:
       MQTT_BROKER_HOST: ${MQTT_BROKER_HOST:-host.docker.internal}
       MQTT_BROKER_PORT: ${MQTT_BROKER_PORT:-1883}
+      MQTT_USERNAME: ${MQTT_USERNAME:-isic}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-change-me-in-production}
       EMULATOR_DEFAULT_BASE_TOPIC: ${EMULATOR_DEFAULT_BASE_TOPIC:-device}
       EMULATOR_DEFAULT_DEVICE_ID: ${EMULATOR_DEFAULT_DEVICE_ID:-ISIC-ESP8266-001}
     restart: unless-stopped

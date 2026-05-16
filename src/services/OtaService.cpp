@@ -32,7 +32,14 @@ OtaService::OtaService(EventBus &bus, const OtaConfig &config)
     , m_bus(bus)
     , m_config(config)
 {
-    m_eventConnections.reserve(3);
+    m_eventConnections.reserve(4);
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event &) {
+        if (!m_pendingCheck && m_mqttConnected && m_config.checkOnConnect && m_config.isConfigured())
+        {
+            LOG_INFO(m_name, "OTA config updated, scheduling check");
+            m_pendingCheck = true;
+        }
+    }));
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::MqttConnected, [this](const Event &) {
         const bool firstConnect{!m_mqttConnected};
         m_mqttConnected = true;
@@ -81,6 +88,15 @@ Status OtaService::begin()
 
 void OtaService::loop()
 {
+    if (m_otaState == OtaState::Completed)
+    {
+        if (millis() - m_completedAtMs >= 1000)
+        {
+            ESP.restart();
+        }
+        return;
+    }
+
      if (!m_config.enabled || !m_config.isConfigured())
     {
         return;
@@ -139,6 +155,7 @@ void OtaService::checkForUpdate()
     if (!fetchManifest(serverVersion, serverMd5, serverSize))
     {
         LOG_ERROR(m_name, "Failed to fetch manifest");
+        m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = "ota/error", .payload = "error: Failed to fetch manifest"}});
         m_otaState = OtaState::Idle;
         return;
     }
@@ -238,7 +255,7 @@ bool OtaService::isNewerVersion(const std::string &serverVersion) const
 
 bool OtaService::beginDownload(const std::string &expectedMd5, const std::uint32_t expectedSize)
 {
-    std::string url{m_config.serverUrl + "/manifest.json"};
+    std::string url{m_config.serverUrl + "/firmware.bin"};
     LOG_INFO(m_name, "Starting download: %s", url.c_str());
 
     m_otaState = OtaState::Downloading;
@@ -405,13 +422,13 @@ void OtaService::completeDownload()
     }
 
     LOG_INFO(m_name, "Success, rebooting...");
+    m_progress = 100;
+    m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = "ota/progress", .payload = "100"}});
     m_bus.publish({EventType::MqttPublishRequest, MqttEvent{.topic = "ota/completed", .payload = "success"}});
     m_otaState = OtaState::Completed;
-    m_progress = 100;
+    m_completedAtMs = millis();
     m_bus.publish(EventType::OtaCompleted);
     cleanupDownload();
-    delay(100);
-    ESP.restart();
 }
 
 void OtaService::failDownload(const char *reason)

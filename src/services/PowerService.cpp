@@ -231,7 +231,8 @@ void PowerService::handleOtaStarted(const Event & /* event */)
 
 void PowerService::handleOtaCompleted(const Event & /* event */)
 {
-    m_otaUpdateActive = false;
+    // Keep sleep blocked — device reboots within 1 s; clearing here would let
+    // light sleep cut WiFi before the ota/completed MQTT message is flushed.
     recordActivity();
 }
 
@@ -533,6 +534,7 @@ void PowerService::enterLightSleep()
     const auto oldState = m_currentState;
     m_currentState = PowerState::LightSleep;
     ++m_metrics.lightSleepEntries;
+    m_pn532TargetMode = computeDesiredPn532Mode(millis());
 
     publishStateChange(m_currentState, oldState, m_pn532TargetMode);
     LOG_INFO(m_name, "Reader entered light sleep");
@@ -549,7 +551,7 @@ void PowerService::enterModemSleep()
 
     const auto oldState = m_currentState;
     m_currentState = PowerState::ModemSleep;
-    m_pn532TargetMode = Pn532PowerMode::PowerDown;
+    m_pn532TargetMode = computeDesiredPn532Mode(millis());
     ++m_metrics.modemSleepEntries;
 
     publishStateChange(m_currentState, oldState, m_pn532TargetMode);

@@ -790,6 +790,7 @@ void ConfigService::handleSetConfigMessage(const std::string &topic, const std::
     }
 
     auto updated{false};
+    auto persist{true};
     const auto json{doc.as<JsonVariant>()};
 
     if (endsWith(topic, "/wifi"))
@@ -829,8 +830,11 @@ void ConfigService::handleSetConfigMessage(const std::string &topic, const std::
     }
     else if (endsWith(topic, "/ota"))
     {
-        LOG_INFO(m_name, "Updating OTA");
+        // OTA config is volatile — applied in memory but not persisted to flash.
+        // After restart the device returns to default (disabled) OTA config.
+        LOG_INFO(m_name, "Updating OTA (volatile, not persisted)");
         updated = deserializeOtaConfig(json, m_config.ota);
+        persist = false;
     }
     else if (endsWith(topic, "/power"))
     {
@@ -845,7 +849,10 @@ void ConfigService::handleSetConfigMessage(const std::string &topic, const std::
 
     if (updated)
     {
-        m_dirty = true;
+        if (persist)
+        {
+            m_dirty = true;
+        }
         m_bus.publish(EventType::ConfigChanged);
     }
 }

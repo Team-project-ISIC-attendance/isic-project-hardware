@@ -61,6 +61,7 @@ private:
     bool m_mqttConnected{false};
     bool m_downloadActive{false};
 
+    std::uint32_t m_completedAtMs{0};
     std::uint32_t m_updateTotalSize{0};
     std::uint32_t m_updateDownloaded{0};
     std::uint32_t m_lastDownloadActivityMs{0};

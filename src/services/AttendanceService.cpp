@@ -47,7 +47,7 @@ AttendanceService::AttendanceService(EventBus &bus, const AttendanceConfig &conf
     m_batch.reserve(m_config.batchMaxSize);
     m_offlineBatch.reserve(m_config.offlineBufferSize);
 
-    m_eventConnections.reserve(4);
+    m_eventConnections.reserve(6);
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::CardScanned, [this](const Event &e) {
         if (const auto *card = e.get<CardEvent>())
         {
@@ -68,6 +68,14 @@ AttendanceService::AttendanceService(EventBus &bus, const AttendanceConfig &conf
         m_batch.reserve(m_config.batchMaxSize);
         m_offlineBatch.reserve(m_config.offlineBufferSize);
     }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::OtaStarted, [this](const Event &) {
+        LOG_INFO(m_name, "OTA started — pausing attendance");
+        m_otaActive = true;
+    }));
+    m_eventConnections.push_back(m_bus.subscribeScoped(EventType::OtaError, [this](const Event &) {
+        LOG_INFO(m_name, "OTA failed — resuming attendance");
+        m_otaActive = false;
+    }));
 }
 
 Status AttendanceService::begin()
@@ -82,6 +90,11 @@ void AttendanceService::loop()
 {
     // Only loop if service is in Running state
     if (m_state != ServiceState::Running)
+    {
+        return;
+    }
+
+    if (m_otaActive)
     {
         return;
     }
@@ -130,6 +143,11 @@ void AttendanceService::flush()
 
 void AttendanceService::processCard(const CardEvent &card)
 {
+    if (m_otaActive)
+    {
+        return;
+    }
+
     // Early exit if debounced - most common case for rapid scans
     if (!shouldProcessCard(card.uid, card.timestampMs))
     {

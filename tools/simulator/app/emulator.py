@@ -44,6 +44,8 @@ class HardwareEmulator:
     def __init__(self) -> None:
         self._hostname = os.getenv("MQTT_BROKER_HOST", "localhost")
         self._port = int(os.getenv("MQTT_BROKER_PORT", "1883"))
+        self._username = os.getenv("MQTT_USERNAME") or None
+        self._password = os.getenv("MQTT_PASSWORD") or None
         self._client_id = os.getenv("EMULATOR_CLIENT_ID", "isic-hardware-emulator")
         self._devices: dict[str, SimulatedDevice] = {}
         self._events: deque[TrafficEvent] = deque(maxlen=EVENT_LIMIT)
@@ -257,6 +259,8 @@ class HardwareEmulator:
                     hostname=self._hostname,
                     port=self._port,
                     identifier=f"{self._client_id}-listener",
+                    username=self._username,
+                    password=self._password,
                 ) as client:
                     await client.subscribe("#")
                     self._append_event(
@@ -493,6 +497,8 @@ class HardwareEmulator:
             hostname=self._hostname,
             port=self._port,
             identifier=f"{self._client_id}-publisher",
+            username=self._username,
+            password=self._password,
         ) as client:
             await client.publish(topic, payload=payload.encode("utf-8"), retain=retain)
 

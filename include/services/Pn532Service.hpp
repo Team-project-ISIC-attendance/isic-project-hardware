@@ -1,14 +1,14 @@
 #ifndef ISIC_PN532_SERVICE_NO_CARD_EVENT
 #define ISIC_PN532_SERVICE_NO_CARD_EVENT
 
-#include "services/ConfigService.hpp"
 #include "common/Config.hpp"
 #include "core/EventBus.hpp"
 #include "core/IService.hpp"
+#include "services/ConfigService.hpp"
 
 #include <Adafruit_PN532.h>
-#include <vector>
 #include <memory>
+#include <vector>
 
 namespace isic
 {
@@ -23,16 +23,9 @@ public:
     Pn532Service(Pn532Service &&) = delete;
     Pn532Service &operator=(Pn532Service &&) = delete;
 
-    // IService implementation
     Status begin() override;
     void loop() override;
     void end() override;
-
-    bool enterSleep();
-    bool wakeup();
-
-    bool enableIrqWakeup();
-    void disableIrqWakeup();
 
     [[nodiscard]] bool isAsleep() const
     {
@@ -70,20 +63,16 @@ public:
         obj["active_irq_failures"] = m_metrics.activeIrqFailures;
         obj["active_poll_fallback_entries"] = m_metrics.activePollFallbackEntries;
         obj["sleep_entries"] = m_metrics.sleepEntries;
-        obj["early_sleep_entries"] = m_metrics.earlySleepEntries;
-        obj["irq_wakeups"] = m_metrics.irqWakeups;
-        obj["wake_failures"] = m_metrics.wakeFailures;
         obj["sleep_wake_reads"] = m_metrics.sleepWakeReads;
-        obj["wake_read_successes"] = m_metrics.sleepWakeReads;
-        obj["wake_read_failures"] = m_metrics.wakeReadFailures;
     }
 
 private:
     void startDetection();
     void handleCardDetected();
-    void handleWakeRead();
     void pollForCard(std::uint32_t timeoutMs);
     void pollWhileAsleep();
+    bool enterSleep();
+    bool wakeup();
     void noteActiveIrqFailure(std::uint32_t nowMs, const char *reason);
     void activateActivePollingFallback(std::uint32_t nowMs, const char *reason);
     void maybeRecoverActiveIrq(std::uint32_t nowMs);
@@ -94,8 +83,7 @@ private:
     void handlePowerStateChange(const PowerEvent &power);
     [[nodiscard]] bool shouldSleepBetweenScans() const;
     [[nodiscard]] bool shouldDelaySleepAfterRead(std::uint32_t nowMs) const;
-    [[nodiscard]] std::uint32_t getSleepPollIntervalMs() const;
-    [[nodiscard]] std::uint32_t getSleepReadTimeoutMs() const;
+    [[nodiscard]] std::uint32_t getPollIntervalWhileAsleep() const;
     void enterRecovering(std::uint32_t nowMs);
     bool reinitializePn532();
     bool recoverIrqMode();
@@ -103,7 +91,7 @@ private:
 
     EventBus &m_bus;
     ConfigService &m_configService;
-    const Pn532Config &m_config; // cached config reference
+    const Pn532Config &m_config;
 
     std::unique_ptr<Adafruit_PN532> m_pn532{nullptr};
 
@@ -120,8 +108,6 @@ private:
     bool m_activeIrqConfigured{false};
     bool m_activeIrqEnabled{false};
     bool m_activePollingFallback{false};
-    bool m_irqWakeupEnabled{false};
-    bool m_sleepIrqWakeEnabled{false};
     bool m_detectionStarted{false};
     PowerState m_powerState{PowerState::Active};
     Pn532PowerMode m_targetPowerMode{Pn532PowerMode::ActiveScan};
@@ -131,8 +117,8 @@ private:
     std::uint32_t m_pollIntervalMs{0};
     std::uint32_t m_wakeRetryAtMs{0};
     std::uint8_t m_consecutiveErrors{0};
-    int m_irqCurr{HIGH};  // Current IRQ pin state for edge detection
-    int m_irqPrev{HIGH};  // Previous IRQ pin state for edge detection
+    int m_irqCurr{HIGH};
+    int m_irqPrev{HIGH};
 };
 } // namespace isic
 

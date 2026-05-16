@@ -83,6 +83,9 @@ private:
     // Offline mode flag
     bool m_useOfflineMode{true};
 
+    // OTA guard — scans and flushes are suppressed while an update is in progress
+    bool m_otaActive{false};
+
     // Current batch
     std::vector<AttendanceRecord> m_batch{};
     std::uint32_t m_batchStartMs{0};

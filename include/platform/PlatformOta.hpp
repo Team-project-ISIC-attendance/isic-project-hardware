@@ -25,7 +25,7 @@
 namespace isic::platform
 {
 
-inline constexpr const char *kBoardName{"esp32dev"};
+inline constexpr const char *kBoardName{"esp32"};
 inline constexpr std::uint32_t kUpdateSizeUnknown{UPDATE_SIZE_UNKNOWN};
 
 } // namespace isic::platform

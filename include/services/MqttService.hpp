@@ -90,6 +90,12 @@ private:
     std::uint32_t m_lastConnectAttemptMs{0};
     std::uint32_t m_consecutiveFailures{0};
 
+    // Tracks what we last connected with so ConfigChanged only reconnects when broker params change
+    std::string m_connectedBroker{};
+    std::uint16_t m_connectedPort{0};
+    std::string m_connectedUsername{};
+    std::string m_connectedPassword{};
+
     std::vector<EventBus::ScopedConnection> m_eventConnections{};
 
     static inline MqttService *s_instance{nullptr};

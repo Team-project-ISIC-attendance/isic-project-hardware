@@ -1,6 +1,7 @@
 # Project files∂
 .pio
 .idea
+dist/
 
 # Docker volumes
 docker/mosquitto/data/*

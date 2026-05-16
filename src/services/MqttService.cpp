@@ -23,12 +23,19 @@ MqttService::MqttService(EventBus &bus, const MqttConfig &config, const DeviceCo
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::ConfigChanged, [this](const Event &) {
         rebuildTopicPrefix();
         if (m_mqttClient.connected()) {
-            m_mqttClient.disconnect();
-            m_mqttState = MqttState::Disconnected;
-            m_consecutiveFailures = 0;
-            m_lastConnectAttemptMs = 0;
-            setState(ServiceState::Ready);
-            LOG_INFO(m_name, "Config updated - reconnecting with new settings");
+            const bool brokerChanged =
+                m_config.brokerAddress != m_connectedBroker ||
+                m_config.port != m_connectedPort ||
+                m_config.username != m_connectedUsername ||
+                m_config.password != m_connectedPassword;
+            if (brokerChanged) {
+                m_mqttClient.disconnect();
+                m_mqttState = MqttState::Disconnected;
+                m_consecutiveFailures = 0;
+                m_lastConnectAttemptMs = 0;
+                setState(ServiceState::Ready);
+                LOG_INFO(m_name, "MQTT broker config changed - reconnecting");
+            }
         }
     }));
     m_eventConnections.push_back(m_bus.subscribeScoped(EventType::WifiConnected, [this](const Event &e) {
@@ -286,6 +293,10 @@ void MqttService::connect()
         m_consecutiveFailures = 0;
         m_mqttState = MqttState::Connected;
         m_metrics.reconnectCount++;
+        m_connectedBroker = m_config.brokerAddress;
+        m_connectedPort = m_config.port;
+        m_connectedUsername = m_config.username;
+        m_connectedPassword = m_config.password;
 
         LOG_INFO(m_name, "MQTT connected - service now Running");
         setState(ServiceState::Running);

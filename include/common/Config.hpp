@@ -157,14 +157,18 @@ struct Pn532Config
 #else
 #error "Unsupported platform"
 #endif
-    static constexpr auto kDefaultReadTimeoutMs{200}; // 200 milliseconds
-    static constexpr auto kDefaultRecoveryDelayMs{2'000}; // 2 seconds
+    static constexpr auto kDefaultReadTimeoutMs{200};          // 200 milliseconds
+    static constexpr auto kDefaultRecoveryDelayMs{2'000};      // 2 seconds
     static constexpr auto kDefaultMaxConsecutiveErrors{5};
-    static constexpr auto kDefaultPollIntervalMs{0}; // Fallback polling interval when IRQ disabled
+    static constexpr auto kDefaultPollIntervalMs{0};           // Fallback polling interval when IRQ disabled
+    static constexpr auto kDefaultLightSleepPollIntervalMs{1'000}; // 1 s — still responsive, class may be active
+    static constexpr auto kDefaultDeepSleepPollIntervalMs{1'000};  // 5 s — nobody scanning, save power
 
     std::uint32_t readTimeoutMs{kDefaultReadTimeoutMs};
     std::uint32_t recoveryDelayMs{kDefaultRecoveryDelayMs};
     std::uint32_t pollIntervalMs{kDefaultPollIntervalMs}; // 0 = use IRQ (default behavior when irqPin valid)
+    std::uint32_t lightSleepPollIntervalMs{kDefaultLightSleepPollIntervalMs};
+    std::uint32_t deepSleepPollIntervalMs{kDefaultDeepSleepPollIntervalMs};
     std::uint8_t spiSckPin{kDefaultSpiSckPin};
     std::uint8_t spiMisoPin{kDefaultSpiMisoPin};
     std::uint8_t spiMosiPin{kDefaultSpiMosiPin};
@@ -188,6 +192,8 @@ struct Pn532Config
         readTimeoutMs = kDefaultReadTimeoutMs;
         recoveryDelayMs = kDefaultRecoveryDelayMs;
         pollIntervalMs = kDefaultPollIntervalMs;
+        lightSleepPollIntervalMs = kDefaultLightSleepPollIntervalMs;
+        deepSleepPollIntervalMs = kDefaultDeepSleepPollIntervalMs;
         spiSckPin = kDefaultSpiSckPin;
         spiMisoPin = kDefaultSpiMisoPin;
         spiMosiPin = kDefaultSpiMosiPin;
@@ -393,13 +399,13 @@ struct PowerConfig
         static constexpr auto kSleepDelayMs{100};
     };
 
-    static constexpr auto kDefaultReaderIdleTimeoutMs{30'000}; // 30 seconds
-    static constexpr auto kDefaultModemSleepAfterMs{300'000}; // 5 minutes
-    static constexpr auto kDefaultPn532SleepAfterMs{10'000};  // 10 seconds
-    static constexpr auto kDefaultReaderReadyHoldMs{5'000};   // 5 seconds
-    static constexpr auto kDefaultBurstWindowMs{15'000};      // 15 seconds
-    static constexpr auto kDefaultBurstScanCount{3};
-    static constexpr auto kDefaultBurstHoldMs{45'000};        // 45 seconds
+    static constexpr auto kDefaultReaderIdleTimeoutMs{60'000};  // 1 min  → LightSleep (1 s PN532 poll)
+    static constexpr auto kDefaultModemSleepAfterMs{900'000};   // 15 min → ModemSleep (5 s PN532 poll)
+    static constexpr auto kDefaultPn532SleepAfterMs{20'000};    // 20 s   → PN532 power-down between students
+    static constexpr auto kDefaultReaderReadyHoldMs{15'000};    // 15 s   → ESP stays Active after each scan
+    static constexpr auto kDefaultBurstWindowMs{300'000};       // 5 min  → detect class-start arrival rate
+    static constexpr auto kDefaultBurstScanCount{3};            // 3 students in 5 min = class is starting
+    static constexpr auto kDefaultBurstHoldMs{300'000};         // 5 min  → hold Active after last burst card
     static constexpr auto kDefaultEnableNfcWakeup{true};
     static constexpr auto kDefaultNfcWakeupPin{Pn532Config::kDefaultIrqPin};
     static constexpr auto kDefaultAutoSleepEnabled{true};
